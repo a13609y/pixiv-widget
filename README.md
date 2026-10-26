@@ -16,7 +16,7 @@ Egern 小组件，单一图源：**Pixiv 免登录搜索 + 反代图床**，只�
 ## 安装
 
 ```
-https://raw.githubusercontent.com/a13609y/1/main/egern/setu.yaml
+https://raw.githubusercontent.com/a13609y/pixiv-widget/main/setu.yaml
 ```
 
 Egern → 工具 → 模块 → `+` → 粘贴地址 → 保存 → 编辑模块填 Env。
