@@ -16,45 +16,45 @@ env_schema:
     description: 多个用 | 或 , 分隔，取第一个作为搜索词
     default_value: ""
   ORDER:
-    name: 排序
-    description: 热门排序在未登录时会退化成最新
-    options: ["date_d", "popular_d"]
+    name: 排序方式
+    description: "最新发布=按时间倒序，永远拿到刚发的；人气最高=按投稿热度，未登录时会自动退化成最新"
+    options: ["最新发布", "人气最高"]
   TYPE:
     name: 作品类型
-    description: illust 只要插画，manga 只要漫画
-    options: ["illust", "manga", "all"]
+    description: "只要插画=排除漫画和动图（推荐）；插画+漫画=混合"
+    options: ["只要插画", "只要漫画", "插画+漫画"]
   AI_MODE:
     name: AI 作品
-    description: only 只要 AI 生成，exclude 过滤掉 AI
-    options: ["any", "only", "exclude"]
+    description: "按 Pixiv 的 aiType 判定（投稿者自己标注的），选「只要AI生成」时建议配 AI 向标签"
+    options: ["不筛选", "只要AI生成", "排除AI生成"]
   EXCLUDE_TAGS:
     name: 排除标签
     description: 命中任意一个就跳过，用 | 分隔
     default_value: ""
   MAX_PAGE:
     name: 最多翻到第几页
-    description: 越大作品越旧，1 表示只看最新
+    description: "1=只看最新；3=推荐；越大越可能遇到旧作品，但画幅匹配机会更多"
     options: ["1", "2", "3", "5", "10"]
   TRENDING:
     name: 热门搜索
-    description: auto 抓到登录态后自动跟随热搜词
-    options: ["auto", "on", "off"]
+    description: "自动=抓到登录 Cookie 才跟随热搜词，没有就用默认词；总是使用=强制；关闭=只用上面的搜索词"
+    options: ["自动", "总是使用", "关闭"]
   COOLDOWN:
     name: 换图间隔
     description: 分钟，0 表示每次刷新都换
     default_value: "30"
   IMAGE_QUALITY:
     name: 图片质量
-    description: auto 小号用 540 方图、中大号用 1200
-    options: ["auto", "master", "thumb"]
+    description: "自动=小号用 540 方图省流量、中大号用 1200 高清；强制高清更清楚但费流量"
+    options: ["自动", "高清1200", "省流540"]
   IMG_HOST:
     name: 图床
     description: 取不到时可换另一个
     options: ["i.pixiv.re", "i.pixiv.cat"]
   ASPECT_FIT:
     name: 画幅匹配
-    description: auto 按尺寸挑横图/方图，off 纯随机
-    options: ["auto", "off"]
+    description: "自动匹配=按小组件尺寸优先挑横图/方图（推荐）；纯随机=完全不挑"
+    options: ["自动匹配", "纯随机"]
   SHOW_INFO:
     name: 显示标题作者
     options: ["true", "false"]

@@ -246,6 +246,44 @@ function normalizeCookie(raw) {
   return 'PHPSESSID=' + v.replace(/\s+/g, '');
 }
 
+// 模块设置里的选项是中文标签，这里映射回内部值；同时兼容旧的英文值
+const VALUE_MAP = {
+  order: {
+    '最新发布': 'date_d', 'date_d': 'date_d', 'date_desc': 'date_d',
+    '人气最高': 'popular_d', 'popular_d': 'popular_d'
+  },
+  type: {
+    '只要插画': 'illust', 'illust': 'illust',
+    '只要漫画': 'manga', 'manga': 'manga',
+    '插画+漫画': 'all', 'all': 'all'
+  },
+  ai: {
+    '不筛选': 'any', 'any': 'any',
+    '只要AI生成': 'only', 'only': 'only',
+    '排除AI生成': 'exclude', 'exclude': 'exclude'
+  },
+  trending: {
+    '自动': 'auto', 'auto': 'auto',
+    '总是使用': 'on', 'on': 'on',
+    '关闭': 'off', 'off': 'off'
+  },
+  quality: {
+    '自动': 'auto', 'auto': 'auto',
+    '高清1200': 'master', 'master': 'master',
+    '省流540': 'thumb', 'thumb': 'thumb'
+  },
+  aspect: {
+    '自动匹配': 'auto', 'auto': 'auto',
+    '纯随机': 'off', 'off': 'off'
+  }
+};
+
+function pickMapped(raw, map, def) {
+  const v = String(raw || '').trim();
+  if (!v) return def;
+  return map[v] || map[v.toLowerCase()] || def;
+}
+
 function readConfig(env) {
   const s = (k, d) => {
     const v = env && env[k];
@@ -281,19 +319,19 @@ function readConfig(env) {
     pixivWord: s('PIXIV_WORD', ''),
     tags: list('TAGS', 10),
     wordMode: oneOf('WORD_MODE', 's_tag', ['s_tag', 's_tag_full', 's_tc']),
-    order: oneOf('ORDER', 'date_d', ['date_d', 'popular_d', 'popular_male_d', 'popular_female_d']),
-    type: oneOf('TYPE', 'illust', ['illust', 'manga', 'all']),
+    order: pickMapped(s('ORDER', 'date_d'), VALUE_MAP.order, 'date_d'),
+    type: pickMapped(s('TYPE', '只要插画'), VALUE_MAP.type, 'illust'),
     maxPage: int('MAX_PAGE', 3, 1, 1000),
-    aiMode: oneOf('AI_MODE', 'any', ['any', 'only', 'exclude']),
+    aiMode: pickMapped(s('AI_MODE', '不筛选'), VALUE_MAP.ai, 'any'),
     excludeTags: list('EXCLUDE_TAGS', 20),
-    trendingMode: oneOf('TRENDING', 'auto', ['auto', 'on', 'off']),
+    trendingMode: pickMapped(s('TRENDING', '自动'), VALUE_MAP.trending, 'auto'),
     cookie: '',            // 运行时解析：env > 抓包脚本存储
     trendingEnabled: false,
     cooldownMin: int('COOLDOWN', 30, 0, 24 * 60),
     maxHistory: int('MAX_HISTORY', 120, 1, 500),
-    quality: oneOf('IMAGE_QUALITY', 'auto', ['auto', 'master', 'thumb']),
+    quality: pickMapped(s('IMAGE_QUALITY', '自动'), VALUE_MAP.quality, 'auto'),
     imgHost: host,
-    aspectFit: s('ASPECT_FIT', 'auto').toLowerCase() !== 'off',
+    aspectFit: pickMapped(s('ASPECT_FIT', '自动匹配'), VALUE_MAP.aspect, 'auto') !== 'off',
     showInfo: bool('SHOW_INFO', true),
     debug: bool('DEBUG', false),
     textColor: s('TEXT_COLOR', '#FFFFFF'),
