@@ -3,7 +3,7 @@
 // @Platform     Egern
 // @Type         http_request
 // @Author       Cuttlefish
-// @Version      1.2.0
+// @Version      1.3.0
 // ==/UserScript==
 
 /* ================================================================
@@ -34,7 +34,7 @@ const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/6
 
 export default async function (ctx) {
   try {
-    // Cookie 头可能被合并成一条（用 ; 或 , 或空格分隔），先用 getAll 拿全再拼
+    // Cookie 头可能被合并成一条（; 或 , 或空格分隔），先 getAll 再拼
     let raw = '';
     try {
       const all = ctx.request.headers.getAll ? ctx.request.headers.getAll('cookie') : null;
@@ -45,32 +45,31 @@ export default async function (ctx) {
     const now = Date.now();
     ctx.storage.set('pixiv_seen_at', String(now));
 
-    // 宽松匹配：允许前后是 ; 、逗号、空格、行首
     const m = /(?:^|[;,\s])\s*PHPSESSID\s*=\s*([0-9A-Za-z%._-]{8,128})/i.exec(raw);
+    const url = String((ctx.request && ctx.request.url) || '');
 
-    // 拦截到了，但没找到 PHPSESSID —— 用来判断 MITM 通没通、Cookie 里都有什么
-    if (!m) {
+    // 首次运行自检：把「看到了什么」直接告诉你，不依赖是否抓到
+    if (!ctx.storage.get(KEY_SEEN)) {
+      ctx.storage.set(KEY_SEEN, String(now));
       const names = raw
         .split(/[;,\s]+/)
         .map(x => x.split('=')[0])
         .filter(Boolean)
-        .slice(0, 10);
-      ctx.storage.set('pixiv_cookie_keys', names.join(','));
-      if (!ctx.storage.get(KEY_SEEN)) {
-        ctx.storage.set(KEY_SEEN, String(now));
-        ctx.notify({
-          title: '✅ MITM 已生效（未发现 PHPSESSID）',
-          body: '这条请求的 Cookie 里有：' + (names.length ? names.join(', ') : '（空）'),
-          sound: false
-        });
-      }
-      return;
+        .slice(0, 12);
+      ctx.notify({
+        title: m ? '🔑 已抓到 PHPSESSID' : (raw ? '⚠️ Cookie 里没有 PHPSESSID' : '✅ MITM 生效但无 Cookie 头'),
+        body: 'cookie头=' + (raw ? raw.length + '字符' : '无') +
+              ' | 键: ' + (names.length ? names.join(',') : '无') +
+              ' | ' + url.replace('https://www.pixiv.net', '').slice(0, 40),
+        sound: false
+      });
     }
+
+    if (!m) return;
 
     const sid = m[1];
     ctx.storage.set(KEY_AT, String(now));
-    // 先存下来：万一验证请求失败，至少小组件能拿到它
-    ctx.storage.set(KEY_SID, sid);
+    ctx.storage.set(KEY_SID, sid);   // 先存下来，验证失败也不丢
 
     const prevSid = ctx.storage.get(KEY_SID) || '';
     const prevState = ctx.storage.get(KEY_STATE) || '';
@@ -141,7 +140,16 @@ export default async function (ctx) {
         sound: false
       });
     }
-  } catch (_) {}
+  } catch (e) {
+    try {
+      const now = Date.now();
+      const last = Number(ctx.storage.get('pixiv_err_at') || 0) || 0;
+      if (now - last > 10 * 60 * 1000) {
+        ctx.storage.set('pixiv_err_at', String(now));
+        ctx.notify({ title: '❌ 抓取脚本报错', body: String((e && e.message) || e).slice(0, 140), sound: false });
+      }
+    } catch (_) {}
+  }
 
   return;
 }
