@@ -3,7 +3,7 @@
 // @Platform     Egern
 // @Type         http_request
 // @Author       Cuttlefish
-// @Version      1.5.0
+// @Version      1.6.0
 // ==/UserScript==
 
 /* ================================================================
@@ -34,6 +34,10 @@ const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/6
 
 export default async function (ctx) {
   try {
+    // 抓取开关：关闭后完全不动存储、不发通知，只透传
+    const sw = String((ctx.env && ctx.env.AUTO_CAPTURE) || '开启').trim();
+    if (/^(关闭|off|false|0|no)$/i.test(sw)) return;
+
     // Cookie 头可能被合并成一条（; 或 , 或空格分隔），先 getAll 再拼
     let raw = '';
     try {
@@ -76,9 +80,16 @@ export default async function (ctx) {
     const sidChanged = prevSid !== sid;
 
     ctx.storage.set(KEY_AT, String(now));
-    ctx.storage.set(KEY_SID, sid);   // 先存下来，验证失败也不丢
-    // 整串 Cookie 也存一份（含 cf_clearance 等风控 Cookie）
-    if (raw && raw.length < 4000) ctx.storage.set('pixiv_cookie_full', raw);
+    ctx.storage.set(KEY_SID, sid);
+
+    // 经验值：登录态 Cookie 通常上千字符，游客态只有几百
+    const logged = raw.length >= 1000;
+    const prevFull = (ctx.storage.get('pixiv_cookie_full') || '').length;
+
+    // 短的（游客）不覆盖之前的长 Cookie，避免把登录态冲掉
+    if (logged || prevFull < 1000) {
+      if (raw && raw.length < 6000) ctx.storage.set('pixiv_cookie_full', raw);
+    }
 
     if (!sidChanged && now - lastCheck < RECHECK_MS) return;
 
@@ -125,14 +136,18 @@ export default async function (ctx) {
     // 通知：只要抓到「新的 Cookie」就提示，不再依赖验证结果
     // （Cloudflare 会让只带 PHPSESSID 的验证请求误判为游客，但 Cookie 本身可用）
     if (sidChanged) {
-      ctx.notify({
-        title: '🔑 已抓到 Pixiv Cookie',
-        body: '长度 ' + raw.length + ' 字符 · 已存入，小组件现在就能用' +
-              (state === 'login' ? ' · 验证：登录态正常'
-                : state === 'guest' ? ' · 验证：疑似游客（不影响使用）'
-                : ' · 验证未通过（不影响使用）'),
-        sound: false
-      });
+      const lastNotify = Number(ctx.storage.get('pixiv_notify_at') || 0) || 0;
+      const important = logged && prevFull < 1000;   // 首次从游客升级到登录态，一定要提示
+      if (important || now - lastNotify > 60 * 60 * 1000) {
+        ctx.storage.set('pixiv_notify_at', String(now));
+        ctx.notify({
+          title: logged ? '🔑 已抓到 Pixiv Cookie' : '🔒 抓到的是游客 Cookie',
+          body: '长度 ' + raw.length + ' 字符' +
+                (logged ? ' · 已存入，小组件可用' : ' · 太短，已跳过（保留之前的登录 Cookie）') +
+                (state === 'login' ? ' · 验证：登录态正常' : ''),
+          sound: false
+        });
+      }
     } else if (state === 'login' && prevState !== 'login') {
       ctx.notify({
         title: '🔑 Pixiv 登录态已接管',

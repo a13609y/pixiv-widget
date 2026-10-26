@@ -62,6 +62,10 @@ env_schema:
     name: 手动 Cookie（可选）
     description: 自动抓不到时，从浏览器/抓包里复制 PHPSESSID 粘这里（可整串 Cookie，会自动提取）
     default_value: ""
+  AUTO_CAPTURE:
+    name: 自动抓取 Cookie
+    description: "开启后浏览 pixiv.net 时自动抓取登录 Cookie；关闭则完全不动存储、不抓也不提示，只透传请求"
+    options: ["开启", "关闭"]
   NOTIFY:
     name: 登录失效通知
     description: "每小时检测一次登录态，失效时发通知；点击通知直接打开 pixiv.net 重新登录（关闭后仍然检测，只是不提醒）"
