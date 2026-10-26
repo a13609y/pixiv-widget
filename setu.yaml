@@ -15,6 +15,18 @@ env_schema:
     name: 精确标签
     description: 多个用 | 或 , 分隔，取第一个作为搜索词
     default_value: ""
+  SOURCE:
+    name: 搜索源
+    description: "第三方代理=支持服务端横竖方筛选、速度更快（不稳定时自动退回官方）；官方网页=直连 pixiv 搜索，仅本地按画幅挑"
+    options: ["第三方代理", "官方网页"]
+  RATIO:
+    name: 画幅筛选
+    description: "仅第三方代理有效：由服务器直接返回指定画幅，横图命中率 100%；官方网页模式下此选项忽略"
+    options: ["自动", "横图", "方图", "竖图"]
+  API_BASE:
+    name: 第三方接口地址
+    description: "默认 api.cocomi.eu.org（该接口需普通浏览器 UA）；可换自建 hibiapi"
+    default_value: "https://api.cocomi.eu.org"
   ORDER:
     name: 排序方式
     description: "最新发布=按时间倒序，永远拿到刚发的；人气最高=按投稿热度，未登录时会自动退化成最新"

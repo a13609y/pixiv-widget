@@ -20,6 +20,9 @@
  *         实测反代只白名单 360/540 两档缩略，720 以上返回 403
  *
  * ── 环境变量（全部可选）────────────────────────────────────────
+ * SOURCE         搜索源：第三方代理（默认，支持服务端横竖方筛选）/ 官方网页
+ * RATIO          画幅筛选（仅第三方代理有效）：自动 / 横图 / 方图 / 竖图
+ * API_BASE       第三方接口地址，默认 https://api.cocomi.eu.org
  * KEYWORD        搜索词，标签模糊匹配
  * TAGS           精确标签，多个用 | 或 , 分隔，第一个作为搜索词
  * PIXIV_WORD     搜索词，优先级最高
@@ -71,6 +74,9 @@ export default async function(ctx) {
   const autoSid = (ctx.storage.get('pixiv_phpsessid') || '').trim();
   cfg.cookieHeader = envRaw || autoFull || (autoSid ? 'PHPSESSID=' + autoSid : '');
   cfg.cookie = !!cfg.cookieHeader;
+  // 服务端已经按画幅筛过了（代理模式 + 指定画幅），本地就别再挑，否则会白翻页
+  if (cfg.source === 'proxy' && cfg.ratio) cfg.aspectFit = false;
+
   cfg.trendingEnabled = cfg.trendingMode === 'on'
     || (cfg.trendingMode === 'auto' && !!cfg.cookie);
   const cooldownMs = cfg.cooldownMin > 0 ? cfg.cooldownMin * 60000 : 0;
@@ -140,7 +146,7 @@ export default async function(ctx) {
     if (barren && hasFresh()) break;
     try {
       if (!word) { picked = await pickWord(ctx, cfg); word = picked.word; }
-      const res = await searchPixiv(ctx, cfg, pool.page || 1, word);
+      const res = await searchAny(ctx, cfg, pool.page || 1, word);
       searches++;
       pool.items = pool.items.concat(res.items).slice(-MAX_POOL);
       pool.page = res.page;
@@ -275,6 +281,14 @@ const VALUE_MAP = {
   aspect: {
     '自动匹配': 'auto', 'auto': 'auto',
     '纯随机': 'off', 'off': 'off'
+  },
+  source: {
+    '第三方代理': 'proxy', 'proxy': 'proxy',
+    '官方网页': 'web', 'web': 'web'
+  },
+  ratio: {
+    '自动': '', '全部': '', 'landscape': 'landscape', 'square': 'square', 'portrait': 'portrait',
+    '横图': 'landscape', '方图': 'square', '竖图': 'portrait'
   }
 };
 
@@ -315,6 +329,9 @@ function readConfig(env) {
   if (!host || host.indexOf('.') < 0) host = DEFAULT_HOST;
 
   return {
+    source: pickMapped(s('SOURCE', '第三方代理'), VALUE_MAP.source, 'proxy'),
+    ratio: pickMapped(s('RATIO', '自动'), VALUE_MAP.ratio, ''),
+    apiBase: s('API_BASE', 'https://api.cocomi.eu.org').replace(/\/+$/, ''),
     keyword: s('KEYWORD', ''),
     pixivWord: s('PIXIV_WORD', ''),
     tags: list('TAGS', 10),
@@ -344,7 +361,7 @@ function uiSignature(cfg) {
 }
 
 function signature(cfg) {
-  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.excludeTags.join(',')].join('|');
+  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.apiBase].join('|');
 }
 
 function nextIso(minutes) {
@@ -383,6 +400,73 @@ async function searchPixiv(ctx, cfg, page, word) {
   const err = new Error(`「${word}」没有符合条件的作品`);
   err.status = 200;
   throw err;
+}
+
+async function searchAny(ctx, cfg, page, word) {
+  if (cfg.source === 'proxy') {
+    try {
+      return await searchProxy(ctx, cfg, page, word);
+    } catch (e) {
+      // 第三方接口挂了就退回官方网页搜索，不让小组件空着
+      ctx.storage.set('pixiv_proxy_err', String((e && e.message) || e).slice(0, 120));
+    }
+  }
+  return await searchPixiv(ctx, cfg, page, word);
+}
+
+// 第三方 Pixiv 代理（hibiapi 系）：服务端支持 ratio_pattern 横竖方筛选
+async function searchProxy(ctx, cfg, page, word) {
+  const p = Math.max(1, page | 0);
+  const qs = [
+    'word=' + encodeURIComponent(word),
+    'page=' + p,
+    'content_type=illust',
+    'sort=date_desc'
+  ];
+  if (cfg.ratio) qs.push('ratio_pattern=' + cfg.ratio);
+
+  const resp = await request(ctx, cfg.apiBase + '/api/pixiv/search?' + qs.join('&'), {
+    'Accept': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1 PixivViewer/1'
+  }, cfg);
+
+  const body = await resp.json().catch(() => null);
+  if (!body || !Array.isArray(body.illusts)) {
+    throw new Error('代理接口返回异常');
+  }
+
+  const items = body.illusts
+    .filter(it => it && it.id && it.width && it.height && it.type !== 'ugoira')
+    .map(it => {
+      const urls = it.image_urls || {};
+      const user = it.user || {};
+      const tags = Array.isArray(it.tags)
+        ? it.tags.map(t => (t && (t.name || t.translated_name)) || '').filter(Boolean)
+        : [];
+      return {
+        pid: it.id,
+        page: `https://www.pixiv.net/artworks/${it.id}`,
+        title: it.title,
+        author: user.name || user.account || '',
+        tags,
+        width: it.width,
+        height: it.height,
+        pageCount: it.page_count,
+        ai: it.illust_ai_type === 2,
+        url: urls.square_medium || urls.medium || urls.large || ''
+      };
+    })
+    .filter(it => it.url && /\.(png|jpe?g|gif|webp)$/i.test(it.url.split('?')[0]))
+    .filter(it => {
+      if (cfg.type === 'illust') return true;      // 接口已按 content_type=illust 过滤
+      if (cfg.type === 'manga') return false;
+      return true;
+    });
+
+  if (items.length === 0) throw new Error('代理接口没有结果');
+
+  const lastPage = Math.min(cfg.maxPage, 50);
+  return { items, page: p >= lastPage ? 1 : p + 1 };
 }
 
 async function fetchSearchPage(ctx, cfg, word, p) {
@@ -511,9 +595,15 @@ function aspectTiers(family) {
 
 function pickByAspect(items, family, aspectFit, strict) {
   if (!items || items.length === 0) return null;
-  if (!aspectFit) return items[Math.floor(Math.random() * items.length)];
-
   const target = targetAspect(family);
+
+  if (!aspectFit) {
+    const pick = items[Math.floor(Math.random() * items.length)];
+    const ar = (pick.width && pick.height) ? pick.width / pick.height : 0;
+    pick.__aspect = { target, ar: ar ? +ar.toFixed(2) : null, band: 'skip' };
+    return pick;
+  }
+
   const tiers = aspectTiers(family);
   const scored = items.map(it => {
     const ar = (it.width && it.height) ? it.width / it.height : 0;
