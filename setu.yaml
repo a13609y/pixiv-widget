@@ -3,8 +3,66 @@ description: 免登录搜索 Pixiv 全站插画，按小组件尺寸自动匹配
 author: Cuttlefish
 icon: photo.on.rectangle.angled
 
+# ── 模块设置页的控件（下方环境变量区块自动生成 UI）─────────────
+env_schema:
+  KEYWORD:
+    name: 搜索词
+    description: 标签模糊搜索，留空则跟随热门搜索
+    default_value: ""
+  TAGS:
+    name: 精确标签
+    description: 多个用 | 或 , 分隔，取第一个作为搜索词
+    default_value: ""
+  ORDER:
+    name: 排序
+    description: 热门排序在未登录时会退化成最新
+    options: ["date_d", "popular_d"]
+  TYPE:
+    name: 作品类型
+    description: illust 只要插画，manga 只要漫画
+    options: ["illust", "manga", "all"]
+  AI_MODE:
+    name: AI 作品
+    description: only 只要 AI 生成，exclude 过滤掉 AI
+    options: ["any", "only", "exclude"]
+  EXCLUDE_TAGS:
+    name: 排除标签
+    description: 命中任意一个就跳过，用 | 分隔
+    default_value: ""
+  MAX_PAGE:
+    name: 最多翻到第几页
+    description: 越大作品越旧，1 表示只看最新
+    options: ["1", "2", "3", "5", "10"]
+  TRENDING:
+    name: 热门搜索
+    description: auto 抓到登录态后自动跟随热搜词
+    options: ["auto", "on", "off"]
+  COOLDOWN:
+    name: 换图间隔
+    description: 分钟，0 表示每次刷新都换
+    default_value: "30"
+  IMAGE_QUALITY:
+    name: 图片质量
+    description: auto 小号用 540 方图、中大号用 1200
+    options: ["auto", "master", "thumb"]
+  IMG_HOST:
+    name: 图床
+    description: 取不到时可换另一个
+    options: ["i.pixiv.re", "i.pixiv.cat"]
+  ASPECT_FIT:
+    name: 画幅匹配
+    description: auto 按尺寸挑横图/方图，off 纯随机
+    options: ["auto", "off"]
+  SHOW_INFO:
+    name: 显示标题作者
+    options: ["true", "false"]
+  DEBUG:
+    name: 调试角标
+    description: 图上显示 🔑/🔒 与画幅、词来源
+    options: ["true", "false"]
+
 scriptings:
-  # 1) 自动抓取 PHPSESSID：浏览 pixiv.net 时后台静默收集，无需手动填 token
+  # 1) 自动抓取 PHPSESSID：浏览 pixiv.net 时后台静默收集
   - http_request:
       name: Pixiv Cookie 自动抓取
       match: "^https://www\\.pixiv\\.net/"
@@ -22,30 +80,13 @@ widgets:
   - name: 每日美图
     script_name: PixivWidget
     env:
-      KEYWORD: ""
-      TAGS: ""
-      PIXIV_WORD: ""
-      WORD_MODE: "s_tag"
-      ORDER: "date_d"
       TYPE: "illust"
       MAX_PAGE: "3"
-      EXCLUDE_TAGS: ""
-      AI_MODE: "any"
       TRENDING: "auto"
-      PIXIV_COOKIE: ""
       COOLDOWN: "30"
-      MAX_HISTORY: "120"
-      IMAGE_QUALITY: "auto"
-      IMG_HOST: "i.pixiv.re"
-      ASPECT_FIT: "auto"
-      SHOW_INFO: "true"
-      DEBUG: "false"
-      TEXT_COLOR: "#FFFFFF"
-      REQUEST_TIMEOUT: "15"
 
 # 抓包只用来读 Cookie，不改写任何流量
 mitm:
   hostnames:
-    includes:
-      - www.pixiv.net
-      - accounts.pixiv.net
+    - "www.pixiv.net"
+    - "accounts.pixiv.net"
