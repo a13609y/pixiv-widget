@@ -1,0 +1,51 @@
+name: Pixiv 每日美图
+description: 免登录搜索 Pixiv 全站插画，按小组件尺寸自动匹配画幅；可选抓取登录 Cookie 以跟随热门搜索
+author: Cuttlefish
+icon: photo.on.rectangle.angled
+
+scriptings:
+  # 1) 自动抓取 PHPSESSID：浏览 pixiv.net 时后台静默收集，无需手动填 token
+  - http_request:
+      name: Pixiv Cookie 自动抓取
+      match: "^https://www\\.pixiv\\.net/"
+      script_url: https://raw.githubusercontent.com/a13609y/pixiv-widget/main/pixiv-cookie.js
+      body_required: false
+      timeout: 10
+
+  # 2) 小组件本体
+  - generic:
+      name: PixivWidget
+      script_url: https://raw.githubusercontent.com/a13609y/pixiv-widget/main/setu.js
+      timeout: 60
+
+widgets:
+  - name: 每日美图
+    script_name: PixivWidget
+    env:
+      KEYWORD: ""
+      TAGS: ""
+      PIXIV_WORD: ""
+      WORD_MODE: "s_tag"
+      ORDER: "date_d"
+      TYPE: "illust"
+      MAX_PAGE: "3"
+      EXCLUDE_TAGS: ""
+      AI_MODE: "any"
+      TRENDING: "auto"
+      PIXIV_COOKIE: ""
+      COOLDOWN: "30"
+      MAX_HISTORY: "120"
+      IMAGE_QUALITY: "auto"
+      IMG_HOST: "i.pixiv.re"
+      ASPECT_FIT: "auto"
+      SHOW_INFO: "true"
+      DEBUG: "false"
+      TEXT_COLOR: "#FFFFFF"
+      REQUEST_TIMEOUT: "15"
+
+# 抓包只用来读 Cookie，不改写任何流量
+mitm:
+  hostnames:
+    includes:
+      - www.pixiv.net
+      - accounts.pixiv.net
