@@ -3,7 +3,7 @@
 // @Platform     Egern
 // @Type         http_request
 // @Author       Cuttlefish
-// @Version      1.3.0
+// @Version      1.4.0
 // ==/UserScript==
 
 /* ================================================================
@@ -70,6 +70,9 @@ export default async function (ctx) {
     const sid = m[1];
     ctx.storage.set(KEY_AT, String(now));
     ctx.storage.set(KEY_SID, sid);   // 先存下来，验证失败也不丢
+    // 关键：整串 Cookie 也存一份（含 cf_clearance 等风控 Cookie），
+    // 只带 PHPSESSID 去请求会被 Cloudflare 判成机器人
+    if (raw && raw.length < 4000) ctx.storage.set('pixiv_cookie_full', raw);
 
     const prevSid = ctx.storage.get(KEY_SID) || '';
     const prevState = ctx.storage.get(KEY_STATE) || '';
@@ -83,7 +86,7 @@ export default async function (ctx) {
     try {
       const resp = await ctx.http.get('https://www.pixiv.net/ajax/search/trending/tags?lang=zh', {
         headers: {
-          'Cookie': 'PHPSESSID=' + sid,
+          'Cookie': raw,
           'Referer': 'https://www.pixiv.net/',
           'User-Agent': UA,
           'Accept': 'application/json'

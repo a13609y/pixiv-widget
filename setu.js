@@ -64,11 +64,13 @@ export default async function(ctx) {
   const cfg = readConfig(ctx.env);
   const now = Date.now();
 
-  // Cookie 来源：env 手填优先；否则用 http_request 脚本抓到的「已验证登录态」
-  const envCookie = normalizeCookie(String((ctx.env && ctx.env.PIXIV_COOKIE) || ''));
+  // Cookie 来源：手填 > 抓包脚本存下的整串 > 抓到的单值
+  // 不再根据「验证结果」决定用不用：验证受 Cloudflare 影响会误判
+  const envRaw = normalizeCookie(String((ctx.env && ctx.env.PIXIV_COOKIE) || ''));
+  const autoFull = (ctx.storage.get('pixiv_cookie_full') || '').trim();
   const autoSid = (ctx.storage.get('pixiv_phpsessid') || '').trim();
-  const autoState = ctx.storage.get('pixiv_phpsessid_state') || '';
-  cfg.cookie = envCookie || ((autoState === 'login' || autoState === 'unknown') ? autoSid : '');
+  cfg.cookieHeader = envRaw || autoFull || (autoSid ? 'PHPSESSID=' + autoSid : '');
+  cfg.cookie = !!cfg.cookieHeader;
   cfg.trendingEnabled = cfg.trendingMode === 'on'
     || (cfg.trendingMode === 'auto' && !!cfg.cookie);
   const cooldownMs = cfg.cooldownMin > 0 ? cfg.cooldownMin * 60000 : 0;
@@ -234,12 +236,14 @@ export default async function(ctx) {
 
 /* ============================ 配置 ============================ */
 
-// 手动输入容错：允许直接粘整串 Cookie（含 PHPSESSID= 和其他键），也允许只粘 32 位值
+// 手动输入容错：
+//   整串 Cookie（含 = 或 ;）→ 原样透传，保留 cf_clearance 等风控 Cookie
+//   只粘了 32 位值          → 补上 PHPSESSID=
 function normalizeCookie(raw) {
   const v = String(raw || '').trim().replace(/^["']|["']$/g, '');
   if (!v) return '';
-  const m = /PHPSESSID\s*=\s*([0-9A-Za-z%._-]{8,128})/i.exec(v);
-  return m ? m[1] : v.replace(/\s+/g, '');
+  if (v.indexOf('=') >= 0 || v.indexOf(';') >= 0) return v;
+  return 'PHPSESSID=' + v.replace(/\s+/g, '');
 }
 
 function readConfig(env) {
@@ -414,7 +418,7 @@ async function fetchSearchPage(ctx, cfg, word, p) {
 }
 
 async function request(ctx, url, headers, cfg) {
-  if (cfg.cookie && !headers['Cookie']) headers['Cookie'] = 'PHPSESSID=' + cfg.cookie;
+  if (cfg.cookieHeader && !headers['Cookie']) headers['Cookie'] = cfg.cookieHeader;
   let resp;
   try {
     resp = await ctx.http.get(url, { headers, timeout: cfg.timeoutMs });
