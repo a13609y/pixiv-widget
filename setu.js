@@ -39,7 +39,8 @@
  * AI_MODE        any（默认）| only（只要 AI 生成）| exclude（过滤 AI）
  *                Pixiv 的 aiType：2 = 投稿者标注的 AI 生成，1 = 非 AI/未标注
  * COOLDOWN       每张图展示时长（分钟），0 = 每次刷新换图   默认 30
- * MAX_HISTORY    本地去重条数                            默认 120
+ * NO_REPEAT      防重复窗口：最近 N 张不重复，超过 N 张才允许重复  默认 30
+ * MAX_HISTORY    旧名，等价于 NO_REPEAT（保留兼容）                            默认 120
  * IMAGE_QUALITY  auto（默认，小号 540 / 中大号 1200）| master | thumb
  * IMG_HOST       图床，默认 i.pixiv.re（大陆可用）
  * ASPECT_FIT     auto（默认，按尺寸挑画幅）| off（纯随机）
@@ -141,9 +142,15 @@ export default async function(ctx) {
 
   const barren = pool.barrenAt && now - pool.barrenAt < 6 * 3600 * 1000;
   const hasFresh = () => pool.items.some(it => it && it.url && !historySet.has(it.url));
+
+  // 池里还有货，但全都在防重复窗口内
+  const allSeen = pool.items.length > 0 && !hasFresh();
+  const seenRecently = pool.allSeenAt && now - pool.allSeenAt < 6 * 3600 * 1000;
   while (!candidate && searches < 2) {
     // 池子彻底空了必须补货；池里还有货只是画幅不合，且这个标签已被判定画幅贫瘠，就不再白翻
     if (barren && hasFresh()) break;
+    // 全部看过了、而且刚搜过 -> 不重复消耗请求，直接交给下面的随机兜底
+    if (allSeen && seenRecently) break;
     try {
       if (!word) { picked = await pickWord(ctx, cfg); word = picked.word; }
       const res = await searchAny(ctx, cfg, pool.page || 1, word);
@@ -153,6 +160,8 @@ export default async function(ctx) {
       pool.ts = now;
       writeJSON(ctx, K.pool, pool);
       candidate = pickFromPool(pool, historySet, family, cfg, true);
+      // 这一页全是看过的：别再白翻下一页，直接交给随机兜底
+      if (!candidate && !pool.items.some(it => it && it.url && !historySet.has(it.url))) break;
     } catch (e) {
       lastError = e.message || '搜索失败';
       errorStatus = e.status || null;
@@ -166,10 +175,19 @@ export default async function(ctx) {
     writeJSON(ctx, K.pool, pool);
   }
 
-  // ③ 才退而求其次：池里画幅最接近的新图
+  // ③ 退而求其次：池里画幅最接近的「没看过」的图
   if (!candidate) {
     candidate = pickFromPool(pool, historySet, family, cfg, false);
     if (candidate) writeJSON(ctx, K.pool, pool);
+  }
+
+  // ④ 整个池子都在防重复窗口内 -> 按规则随机重复一张（并记下时间，6 小时内不再反复搜）
+  if (!candidate) {
+    candidate = pickAnyFromPool(pool);
+    if (candidate) {
+      pool.allSeenAt = now;
+      writeJSON(ctx, K.pool, pool);
+    }
   }
 
   if (!candidate) {
@@ -205,6 +223,7 @@ export default async function(ctx) {
     title: clean(candidate.title),
     author: clean(candidate.author),
     tags: Array.isArray(candidate.tags) ? candidate.tags.slice(0, 8) : [],
+    repeat: !!candidate.__repeat,
     aspect: candidate.__aspect || null,
     searches,
     wordSource: picked ? picked.source : '',
@@ -217,6 +236,7 @@ export default async function(ctx) {
   };
 
   writeJSON(ctx, K.cache + family, entry);
+  if (history.indexOf(candidate.url) >= 0) history.splice(history.indexOf(candidate.url), 1);
   history.push(candidate.url);
   while (history.length > cfg.maxHistory) history.shift();
   writeJSON(ctx, K.history, history);
@@ -227,6 +247,7 @@ export default async function(ctx) {
     pool: pool.items.length,
     page: pool.page,
     searches,
+    repeat: !!candidate.__repeat,
     aspect: candidate.__aspect || null,
     ai: !!candidate.ai,
     aiMode: cfg.aiMode,
@@ -351,7 +372,7 @@ function readConfig(env) {
     cookie: '',            // 运行时解析：env > 抓包脚本存储
     trendingEnabled: false,
     cooldownMin: int('COOLDOWN', 30, 0, 24 * 60),
-    maxHistory: int('MAX_HISTORY', 120, 1, 500),
+    maxHistory: int('NO_REPEAT', int('MAX_HISTORY', 30, 1, 500), 1, 500),
     quality: pickMapped(s('IMAGE_QUALITY', '自动'), VALUE_MAP.quality, 'auto'),
     imgHost: host,
     aspectFit: pickMapped(s('ASPECT_FIT', '自动匹配'), VALUE_MAP.aspect, 'auto') !== 'off',
@@ -651,6 +672,16 @@ function pickByAspect(items, family, aspectFit, strict) {
   return picked.it;
 }
 
+// 池内全部都在防重复窗口内时用：忽略历史，随机取一张并标记「重复」
+function pickAnyFromPool(pool) {
+  if (!pool || !Array.isArray(pool.items) || pool.items.length === 0) return null;
+  const idx = Math.floor(Math.random() * pool.items.length);
+  const picked = pool.items.splice(idx, 1)[0];
+  if (!picked) return null;
+  picked.__repeat = true;
+  return picked;
+}
+
 function pickFromPool(pool, historySet, family, cfg, strict) {
   if (!pool || !Array.isArray(pool.items) || pool.items.length === 0) return null;
   const fresh = pool.items.filter(it => it && it.url && !historySet.has(it.url));
@@ -857,7 +888,7 @@ function buildWidget(entry, family, cfg, refreshAfter) {
     if (cfg.debug && entry.aspect) {
       lines.push({
         type: 'text',
-        text: `${cfg.cookie ? '🔑' : '🔒'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band} · ${entry.wordSource || '-'} · 拦截${entry.seenText || seenText}`,
+        text: `${cfg.cookie ? '🔑' : '🔒'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band}${entry.repeat ? ' · ♻重复' : ''} · ${entry.wordSource || '-'} · 拦截${entry.seenText || seenText}`,
         font: { size: 'caption2' },
         textColor: 'rgba(255,255,255,0.55)',
         maxLines: 1
