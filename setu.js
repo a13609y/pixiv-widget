@@ -85,6 +85,14 @@ export default async function(ctx) {
   const remaining = cooldownMs - (now - lastShow);
 
   if (cached && cached.dataUri && remaining > 0) {
+    // 只改了「显示标题作者 / 调试角标 / 文字颜色」这类纯排版项时，
+    // 不必等换图：把缓存打上新签名并请求 1 分钟后重绘，WidgetKit 很快就会用新样式渲染
+    const uiSig = uiSignature(cfg);
+    if (cached.uiSig !== uiSig) {
+      cached.uiSig = uiSig;
+      writeJSON(ctx, K.cache + family, cached);
+      return buildWidget(cached, family, cfg, new Date(now + 60 * 1000).toISOString());
+    }
     return buildWidget(cached, family, cfg, new Date(now + remaining).toISOString());
   }
 
@@ -189,6 +197,7 @@ export default async function(ctx) {
     origin: candidate.url,
     url: img.url,
     dataUri: img.dataUri,
+    uiSig: uiSignature(cfg),
     at: now
   };
 
@@ -278,6 +287,10 @@ function readConfig(env) {
     textColor: s('TEXT_COLOR', '#FFFFFF'),
     timeoutMs: int('REQUEST_TIMEOUT', 15, 5, 60) * 1000
   };
+}
+
+function uiSignature(cfg) {
+  return [cfg.showInfo, cfg.debug, cfg.textColor].join('|');
 }
 
 function signature(cfg) {
