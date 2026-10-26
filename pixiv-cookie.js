@@ -3,7 +3,7 @@
 // @Platform     Egern
 // @Type         http_request
 // @Author       Cuttlefish
-// @Version      1.6.0
+// @Version      1.7.0
 // ==/UserScript==
 
 /* ================================================================
@@ -74,6 +74,7 @@ export default async function (ctx) {
     const sid = m[1];
 
     // 先读旧值再写，否则 prevSid 永远等于 sid，sidChanged 永远是 false（通知永远不触发）
+    let notified = false;
     const prevSid = ctx.storage.get(KEY_SID) || '';
     const prevState = ctx.storage.get(KEY_STATE) || '';
     const lastCheck = Number(ctx.storage.get(KEY_CHECK) || 0) || 0;
@@ -96,7 +97,7 @@ export default async function (ctx) {
     let state = null;
     let netErr = '';
     try {
-      const resp = await ctx.http.get('https://www.pixiv.net/ajax/search/trending/tags?lang=zh', {
+      const resp = await ctx.http.get('https://www.pixiv.net/ajax/user/self?lang=zh', {
         headers: {
           'Cookie': raw,
           'Referer': 'https://www.pixiv.net/',
@@ -106,7 +107,11 @@ export default async function (ctx) {
         timeout: 8000
       });
       const body = await resp.json().catch(() => null);
-      if (body) state = body.error === false ? 'login' : 'guest';
+      if (body) {
+        // userData 有对象 = 登录态；null = 游客。比热搜接口可靠（后者会被 Cloudflare 干扰）
+        if (body.userData) state = 'login';
+        else if (body.userData === null) state = 'guest';
+      }
     } catch (e) {
       netErr = String((e && e.message) || e || '网络错误');
     }
@@ -135,26 +140,34 @@ export default async function (ctx) {
 
     // 通知：只要抓到「新的 Cookie」就提示，不再依赖验证结果
     // （Cloudflare 会让只带 PHPSESSID 的验证请求误判为游客，但 Cookie 本身可用）
-    if (sidChanged) {
+    {
       const lastNotify = Number(ctx.storage.get('pixiv_notify_at') || 0) || 0;
-      const important = logged && prevFull < 1000;   // 首次从游客升级到登录态，一定要提示
-      if (important || now - lastNotify > 60 * 60 * 1000) {
+      const important = logged && prevFull < 1000;          // 游客 → 登录，必须提示
+      const heartbeat = now - lastNotify > 6 * 3600 * 1000; // 6 小时没提示过，报个平安
+      const changedOk = sidChanged && now - lastNotify > 60 * 60 * 1000;
+
+      if (important || changedOk || heartbeat) {
+        notified = true;
         ctx.storage.set('pixiv_notify_at', String(now));
         ctx.notify({
-          title: logged ? '🔑 已抓到 Pixiv Cookie' : '🔒 抓到的是游客 Cookie',
-          body: '长度 ' + raw.length + ' 字符' +
-                (logged ? ' · 已存入，小组件可用' : ' · 太短，已跳过（保留之前的登录 Cookie）') +
-                (state === 'login' ? ' · 验证：登录态正常' : ''),
+          title: important || changedOk
+            ? (logged ? '🔑 已抓到 Pixiv Cookie' : '🔒 抓到的是游客 Cookie')
+            : '✅ 抓取正常（Cookie 未变）',
+          body: '长度 ' + raw.length + ' 字符 · ' +
+                (state === 'login' ? '登录态正常' : state === 'guest' ? '疑似游客' : '验证未通过') +
+                ' · ' + (logged ? '已存入' : '太短，已跳过'),
           sound: false
         });
       }
-    } else if (state === 'login' && prevState !== 'login') {
+    }
+
+    if (!notified && state === 'login' && prevState !== 'login') {
       ctx.notify({
         title: '🔑 Pixiv 登录态已接管',
         body: '小组件现在会跟随热门搜索',
         sound: false
       });
-    } else if (prevState === 'login' && state === 'guest') {
+    } else if (!notified && prevState === 'login' && state === 'guest') {
       ctx.notify({
         title: '🔒 Pixiv 登录态失效',
         body: '会话已过期，请在浏览器重新登录 pixiv.net',

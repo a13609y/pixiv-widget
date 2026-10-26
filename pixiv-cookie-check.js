@@ -3,7 +3,7 @@
 // @Platform     Egern
 // @Type         schedule
 // @Author       Cuttlefish
-// @Version      1.0.0
+// @Version      1.1.0
 // ==/UserScript==
 
 /* ================================================================
@@ -35,7 +35,7 @@ export default async function (ctx) {
   let ok = false;
   let detail = '';
   try {
-    const resp = await ctx.http.get('https://www.pixiv.net/ajax/search/trending/tags?lang=zh', {
+    const resp = await ctx.http.get('https://www.pixiv.net/ajax/user/self?lang=zh', {
       headers: {
         'Cookie': header,
         'Referer': 'https://www.pixiv.net/',
@@ -45,8 +45,9 @@ export default async function (ctx) {
       timeout: 10000
     });
     const body = await resp.json().catch(() => null);
-    ok = !!(body && body.error === false);
-    if (!ok) detail = (body && body.message) || 'error';
+    // userData 有对象 = 登录；null = 游客。比热搜接口可靠
+    ok = !!(body && body.userData);
+    if (!ok) detail = body ? 'guest' : 'unparsable';
   } catch (e) {
     // 网络问题不算失效，直接结束，不改状态
     ctx.storage.set('pixiv_check_net_err', String(Date.now()));
@@ -61,8 +62,8 @@ export default async function (ctx) {
     if (Date.now() - last > NOTIFY_GAP) {
       ctx.storage.set('pixiv_expire_notify', String(Date.now()));
       ctx.notify({
-        title: '🔒 Pixiv 登录态已失效',
-        body: '热搜接口拒绝了这个会话，点这里打开 pixiv.net 重新登录',
+        title: '🔒 Pixiv 登录态失效',
+        body: '会话已不是登录状态（userData 为空），点这里打开 pixiv.net 重新登录',
         sound: false,
         action: { type: 'openUrl', url: 'https://www.pixiv.net/' }
       });
