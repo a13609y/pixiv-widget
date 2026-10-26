@@ -58,6 +58,10 @@ env_schema:
     name: 热门搜索 【通用·需登录】
     description: "自动=抓到登录 Cookie 才跟随热搜词；关闭=只用上面的搜索词"
     options: ["自动", "总是使用", "关闭"]
+  COOKIE_SOURCE:
+    name: Cookie 来源 【通用】
+    description: "手动优先=填了就只用手填的（旧 Cookie 会挡住自动更新）；自动优先=自动抓到就用自动的，抓不到才用手填；只用自动=完全忽略手填"
+    options: ["手动优先", "自动优先", "只用自动"]
   PIXIV_COOKIE:
     name: 手动 Cookie 【通用】
     description: 自动抓不到时手动粘贴整串 Cookie（会自动提取 PHPSESSID）

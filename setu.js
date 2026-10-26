@@ -73,7 +73,17 @@ export default async function(ctx) {
   const envRaw = normalizeCookie(String((ctx.env && ctx.env.PIXIV_COOKIE) || ''));
   const autoFull = (ctx.storage.get('pixiv_cookie_full') || '').trim();
   const autoSid = (ctx.storage.get('pixiv_phpsessid') || '').trim();
-  cfg.cookieHeader = envRaw || autoFull || (autoSid ? 'PHPSESSID=' + autoSid : '');
+  const autoHeader = autoFull || (autoSid ? 'PHPSESSID=' + autoSid : '');
+  if (cfg.cookieMode === 'manual') {
+    cfg.cookieHeader = envRaw || autoHeader;
+    cfg.cookieFrom = envRaw ? 'manual' : (autoHeader ? 'auto' : '');
+  } else if (cfg.cookieMode === 'auto') {
+    cfg.cookieHeader = autoHeader || envRaw;
+    cfg.cookieFrom = autoHeader ? 'auto' : (envRaw ? 'manual' : '');
+  } else {                       // 只用自动
+    cfg.cookieHeader = autoHeader;
+    cfg.cookieFrom = autoHeader ? 'auto' : '';
+  }
   cfg.cookie = !!cfg.cookieHeader;
   // 服务端已经按画幅筛过了（代理模式 + 指定画幅），本地就别再挑，否则会白翻页
   if (cfg.source === 'proxy' && cfg.ratio) cfg.aspectFit = false;
@@ -255,6 +265,7 @@ export default async function(ctx) {
     wordSource: picked ? picked.source : '',
     seenText,
     cookie: cfg.cookie ? 'on' : 'off',
+    cookieFrom: cfg.cookieFrom || '',
     error: lastError || null
   });
 
@@ -307,6 +318,11 @@ const VALUE_MAP = {
     '第三方代理': 'proxy', 'proxy': 'proxy',
     '官方网页': 'web', 'web': 'web'
   },
+  cookieSource: {
+    '手动优先': 'manual', 'manual': 'manual',
+    '自动优先': 'auto', 'auto': 'auto',
+    '只用自动': 'auto_only', 'auto_only': 'auto_only'
+  },
   period: {
     '不限': '', 'day': 'day', 'week': 'week', 'month': 'month',
     'half_year': 'half_year', 'year': 'year',
@@ -358,6 +374,7 @@ function readConfig(env) {
     source: pickMapped(s('SOURCE', '第三方代理'), VALUE_MAP.source, 'proxy'),
     ratio: pickMapped(s('RATIO', '自动'), VALUE_MAP.ratio, ''),
     period: pickMapped(s('PERIOD', '不限'), VALUE_MAP.period, ''),
+    cookieMode: pickMapped(s('COOKIE_SOURCE', '手动优先'), VALUE_MAP.cookieSource, 'manual'),
     apiBase: s('API_BASE', 'https://api.cocomi.eu.org').replace(/\/+$/, ''),
     keyword: s('KEYWORD', ''),
     pixivWord: s('PIXIV_WORD', ''),
