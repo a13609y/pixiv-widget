@@ -2,6 +2,8 @@ name: Pixiv 每日美图
 description: 免登录搜索 Pixiv 全站插画，按小组件尺寸自动匹配画幅；可选抓取登录 Cookie 以跟随热门搜索
 author: Cuttlefish
 icon: photo.on.rectangle.angled
+homepage: https://github.com/a13609y/pixiv-widget
+manual: https://github.com/a13609y/pixiv-widget#readme
 
 # ── 模块设置页的控件（下方环境变量区块自动生成 UI）─────────────
 env_schema:
@@ -62,7 +64,7 @@ env_schema:
     default_value: ""
   DEBUG:
     name: 调试角标
-    description: 图上显示 🔑/🔒 与画幅、词来源
+    description: "开启后图左下角显示一行状态：🔑=登录Cookie已生效 / 🔒=未生效；a/b=作品画幅/目标画幅；in=横图(第一档)、near=方图(第二档)、relaxed=兜底；词来源 trending=热搜词、config=你填的、default=兜底词、池=直接用候选池；拦截HH:MM=抓包脚本最后一次被调用的时间"
     options: ["true", "false"]
 
 scriptings:

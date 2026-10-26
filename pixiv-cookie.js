@@ -3,7 +3,7 @@
 // @Platform     Egern
 // @Type         http_request
 // @Author       Cuttlefish
-// @Version      1.4.0
+// @Version      1.5.0
 // ==/UserScript==
 
 /* ================================================================
@@ -68,16 +68,17 @@ export default async function (ctx) {
     if (!m) return;
 
     const sid = m[1];
-    ctx.storage.set(KEY_AT, String(now));
-    ctx.storage.set(KEY_SID, sid);   // 先存下来，验证失败也不丢
-    // 关键：整串 Cookie 也存一份（含 cf_clearance 等风控 Cookie），
-    // 只带 PHPSESSID 去请求会被 Cloudflare 判成机器人
-    if (raw && raw.length < 4000) ctx.storage.set('pixiv_cookie_full', raw);
 
+    // 先读旧值再写，否则 prevSid 永远等于 sid，sidChanged 永远是 false（通知永远不触发）
     const prevSid = ctx.storage.get(KEY_SID) || '';
     const prevState = ctx.storage.get(KEY_STATE) || '';
     const lastCheck = Number(ctx.storage.get(KEY_CHECK) || 0) || 0;
     const sidChanged = prevSid !== sid;
+
+    ctx.storage.set(KEY_AT, String(now));
+    ctx.storage.set(KEY_SID, sid);   // 先存下来，验证失败也不丢
+    // 整串 Cookie 也存一份（含 cf_clearance 等风控 Cookie）
+    if (raw && raw.length < 4000) ctx.storage.set('pixiv_cookie_full', raw);
 
     if (!sidChanged && now - lastCheck < RECHECK_MS) return;
 
@@ -121,25 +122,27 @@ export default async function (ctx) {
     ctx.storage.set(KEY_STATE, state);
     ctx.storage.set(KEY_SEEN, String(now));
 
-    const changed = sidChanged || prevState !== state;
-    if (!changed) return;
-
-    if (state === 'login') {
+    // 通知：只要抓到「新的 Cookie」就提示，不再依赖验证结果
+    // （Cloudflare 会让只带 PHPSESSID 的验证请求误判为游客，但 Cookie 本身可用）
+    if (sidChanged) {
       ctx.notify({
-        title: '🔑 Pixiv 登录态已接管',
-        body: '小组件现在会跟随热门搜索，登录态接口已可用',
+        title: '🔑 已抓到 Pixiv Cookie',
+        body: '长度 ' + raw.length + ' 字符 · 已存入，小组件现在就能用' +
+              (state === 'login' ? ' · 验证：登录态正常'
+                : state === 'guest' ? ' · 验证：疑似游客（不影响使用）'
+                : ' · 验证未通过（不影响使用）'),
         sound: false
       });
-    } else if (prevState === 'login') {
+    } else if (state === 'login' && prevState !== 'login') {
+      ctx.notify({
+        title: '🔑 Pixiv 登录态已接管',
+        body: '小组件现在会跟随热门搜索',
+        sound: false
+      });
+    } else if (prevState === 'login' && state === 'guest') {
       ctx.notify({
         title: '🔒 Pixiv 登录态失效',
         body: '会话已过期，请在浏览器重新登录 pixiv.net',
-        sound: false
-      });
-    } else {
-      ctx.notify({
-        title: '🔒 抓到的是游客 Cookie',
-        body: 'MITM 正常，但这个会话未登录。请在浏览器登录 pixiv.net。',
         sound: false
       });
     }
