@@ -62,6 +62,10 @@ env_schema:
     name: 手动 Cookie（可选）
     description: 自动抓不到时，从浏览器/抓包里复制 PHPSESSID 粘这里（可整串 Cookie，会自动提取）
     default_value: ""
+  NOTIFY:
+    name: 登录失效通知
+    description: "每小时检测一次登录态，失效时发通知；点击通知直接打开 pixiv.net 重新登录（关闭后仍然检测，只是不提醒）"
+    options: ["开启", "关闭"]
   DEBUG:
     name: 调试角标
     description: "开启后图左下角显示一行状态：🔑=登录Cookie已生效 / 🔒=未生效；a/b=作品画幅/目标画幅；in=横图(第一档)、near=方图(第二档)、relaxed=兜底；词来源 trending=热搜词、config=你填的、default=兜底词、池=直接用候选池；拦截HH:MM=抓包脚本最后一次被调用的时间"
@@ -76,7 +80,14 @@ scriptings:
       body_required: false
       timeout: 10
 
-  # 2) 小组件本体
+  # 2) 每小时检测登录态，失效就通知（点击直达 pixiv.net）
+  - schedule:
+      name: Pixiv Cookie 定时检测
+      cron: "0 * * * *"
+      script_url: https://raw.githubusercontent.com/a13609y/pixiv-widget/main/pixiv-cookie-check.js
+      timeout: 30
+
+  # 3) 小组件本体
   - generic:
       name: PixivWidget
       script_url: https://raw.githubusercontent.com/a13609y/pixiv-widget/main/setu.js
