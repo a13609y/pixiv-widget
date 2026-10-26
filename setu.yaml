@@ -7,84 +7,93 @@ manual: https://github.com/a13609y/pixiv-widget#readme
 
 # ── 模块设置页的控件（下方环境变量区块自动生成 UI）─────────────
 env_schema:
+  # ── 搜索 ──────────────────────────────────────────────
+  SOURCE:
+    name: 搜索源
+    description: "第三方代理=服务端筛画幅/时段，速度快（挂了自动退回官方）；官方网页=直连 pixiv"
+    options: ["第三方代理", "官方网页"]
   KEYWORD:
-    name: 搜索词
+    name: 搜索词 【通用】
     description: 标签模糊搜索，留空则跟随热门搜索
     default_value: ""
   TAGS:
-    name: 精确标签
+    name: 精确标签 【通用】
     description: 多个用 | 或 , 分隔，取第一个作为搜索词
     default_value: ""
-  SOURCE:
-    name: 搜索源
-    description: "第三方代理=支持服务端横竖方筛选、速度更快（不稳定时自动退回官方）；官方网页=直连 pixiv 搜索，仅本地按画幅挑"
-    options: ["第三方代理", "官方网页"]
-  RATIO:
-    name: 画幅筛选
-    description: "仅第三方代理有效：由服务器直接返回指定画幅，横图命中率 100%；官方网页模式下此选项忽略"
-    options: ["自动", "横图", "方图", "竖图"]
-  API_BASE:
-    name: 第三方接口地址
-    description: "默认 api.cocomi.eu.org（该接口需普通浏览器 UA）；可换自建 hibiapi"
-    default_value: "https://api.cocomi.eu.org"
   ORDER:
-    name: 排序方式
-    description: "最新发布=按时间倒序，永远拿到刚发的；人气最高=按投稿热度，未登录时会自动退化成最新"
+    name: 排序 【通用】
+    description: "最新发布=按时间倒序；人气最高=按热度（网页端未登录时会退化成最新）"
     options: ["最新发布", "人气最高"]
+  PERIOD:
+    name: 时段 【通用】
+    description: "只取最近这段时间发布的作品：代理用 duration 参数，官方网页用 scd 参数，两边都实测有效"
+    options: ["不限", "一天内", "一周内", "一个月内", "半年内", "一年内"]
+  RATIO:
+    name: 画幅 【仅代理】
+    description: "服务器直接返回指定画幅，横图命中率 100%；官方网页模式下忽略此项（改由本地挑）"
+    options: ["自动", "横图", "方图", "竖图"]
   TYPE:
-    name: 作品类型
-    description: "只要插画=排除漫画和动图（推荐）；插画+漫画=混合"
+    name: 作品类型 【仅网页】
+    description: "第三方代理固定只返回插画，此项仅在官方网页模式生效"
     options: ["只要插画", "只要漫画", "插画+漫画"]
   AI_MODE:
-    name: AI 作品
-    description: "按 Pixiv 的 aiType 判定（投稿者自己标注的），选「只要AI生成」时建议配 AI 向标签"
+    name: AI 作品 【通用】
+    description: "按 illust_ai_type 本地过滤，两个源都生效（比接口自带开关可靠）"
     options: ["不筛选", "只要AI生成", "排除AI生成"]
   EXCLUDE_TAGS:
-    name: 排除标签
-    description: 命中任意一个就跳过，用 | 分隔
+    name: 排除标签 【通用】
+    description: 命中任意一个标签就跳过，用 | 分隔
     default_value: ""
   MAX_PAGE:
-    name: 最多翻到第几页
-    description: "1=只看最新；3=推荐；越大越可能遇到旧作品，但画幅匹配机会更多"
+    name: 翻页上限 【通用】
+    description: "1=只看最新；3=推荐；越大越可能遇到旧作品"
     options: ["1", "2", "3", "5", "10"]
+  API_BASE:
+    name: 接口地址 【仅代理】
+    description: 默认 api.cocomi.eu.org（hibiapi 系），可换自建
+    default_value: "https://api.cocomi.eu.org"
+
+  # ── 登录态 ────────────────────────────────────────────
   TRENDING:
-    name: 热门搜索
-    description: "自动=抓到登录 Cookie 才跟随热搜词，没有就用默认词；总是使用=强制；关闭=只用上面的搜索词"
+    name: 热门搜索 【通用·需登录】
+    description: "自动=抓到登录 Cookie 才跟随热搜词；关闭=只用上面的搜索词"
     options: ["自动", "总是使用", "关闭"]
+  PIXIV_COOKIE:
+    name: 手动 Cookie 【通用】
+    description: 自动抓不到时手动粘贴整串 Cookie（会自动提取 PHPSESSID）
+    default_value: ""
+  AUTO_CAPTURE:
+    name: 自动抓取 Cookie 【通用】
+    description: 浏览 pixiv.net 时自动抓取登录 Cookie；关闭后完全不抓、不提示
+    options: ["开启", "关闭"]
+  NOTIFY:
+    name: 登录失效通知 【通用】
+    description: 每小时检测一次，失效时通知；点击通知直接打开 pixiv.net
+    options: ["开启", "关闭"]
+
+  # ── 展示 ──────────────────────────────────────────────
   COOLDOWN:
-    name: 换图间隔
+    name: 换图间隔 【通用】
     description: 分钟，0 表示每次刷新都换
     default_value: "30"
   IMAGE_QUALITY:
-    name: 图片质量
-    description: "自动=小号用 540 方图省流量、中大号用 1200 高清；强制高清更清楚但费流量"
+    name: 图片质量 【通用】
+    description: "自动=小号用 540 方图、中大号用 1200 高清"
     options: ["自动", "高清1200", "省流540"]
   IMG_HOST:
-    name: 图床
-    description: 取不到时可换另一个
+    name: 图床 【通用】
+    description: 取不到图时可换另一个
     options: ["i.pixiv.re", "i.pixiv.cat"]
   ASPECT_FIT:
-    name: 画幅匹配
-    description: "自动匹配=按小组件尺寸优先挑横图/方图（推荐）；纯随机=完全不挑"
+    name: 画幅匹配 【仅网页】
+    description: "官方网页模式本地挑画幅用；代理模式选过画幅后自动关闭（避免白翻页）"
     options: ["自动匹配", "纯随机"]
   SHOW_INFO:
-    name: 显示标题作者
+    name: 显示标题作者 【通用】
     options: ["true", "false"]
-  PIXIV_COOKIE:
-    name: 手动 Cookie（可选）
-    description: 自动抓不到时，从浏览器/抓包里复制 PHPSESSID 粘这里（可整串 Cookie，会自动提取）
-    default_value: ""
-  AUTO_CAPTURE:
-    name: 自动抓取 Cookie
-    description: "开启后浏览 pixiv.net 时自动抓取登录 Cookie；关闭则完全不动存储、不抓也不提示，只透传请求"
-    options: ["开启", "关闭"]
-  NOTIFY:
-    name: 登录失效通知
-    description: "每小时检测一次登录态，失效时发通知；点击通知直接打开 pixiv.net 重新登录（关闭后仍然检测，只是不提醒）"
-    options: ["开启", "关闭"]
   DEBUG:
-    name: 调试角标
-    description: "开启后图左下角显示一行状态：🔑=登录Cookie已生效 / 🔒=未生效；a/b=作品画幅/目标画幅；in=横图(第一档)、near=方图(第二档)、relaxed=兜底；词来源 trending=热搜词、config=你填的、default=兜底词、池=直接用候选池；拦截HH:MM=抓包脚本最后一次被调用的时间"
+    name: 调试角标 【通用】
+    description: "显示一行状态：🔑/🔒 · 画幅/目标 · in横图 near方图 skip已服务端筛 · 词来源 · 拦截HH:MM"
     options: ["true", "false"]
 
 scriptings:

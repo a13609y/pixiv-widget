@@ -286,6 +286,11 @@ const VALUE_MAP = {
     '第三方代理': 'proxy', 'proxy': 'proxy',
     '官方网页': 'web', 'web': 'web'
   },
+  period: {
+    '不限': '', 'day': 'day', 'week': 'week', 'month': 'month',
+    'half_year': 'half_year', 'year': 'year',
+    '一天内': 'day', '一周内': 'week', '一个月内': 'month', '半年内': 'half_year', '一年内': 'year'
+  },
   ratio: {
     '自动': '', '全部': '', 'landscape': 'landscape', 'square': 'square', 'portrait': 'portrait',
     '横图': 'landscape', '方图': 'square', '竖图': 'portrait'
@@ -331,6 +336,7 @@ function readConfig(env) {
   return {
     source: pickMapped(s('SOURCE', '第三方代理'), VALUE_MAP.source, 'proxy'),
     ratio: pickMapped(s('RATIO', '自动'), VALUE_MAP.ratio, ''),
+    period: pickMapped(s('PERIOD', '不限'), VALUE_MAP.period, ''),
     apiBase: s('API_BASE', 'https://api.cocomi.eu.org').replace(/\/+$/, ''),
     keyword: s('KEYWORD', ''),
     pixivWord: s('PIXIV_WORD', ''),
@@ -361,7 +367,7 @@ function uiSignature(cfg) {
 }
 
 function signature(cfg) {
-  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.apiBase].join('|');
+  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.period, cfg.apiBase].join('|');
 }
 
 function nextIso(minutes) {
@@ -376,12 +382,7 @@ async function searchPixiv(ctx, cfg, page, word) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await fetchSearchPage(ctx, cfg, word, p);
 
-    const pass = res.items.filter(it => {
-      if (cfg.aiMode === 'only' && !it.ai) return false;
-      if (cfg.aiMode === 'exclude' && it.ai) return false;
-      if (isExcluded(it, cfg.excludeTags)) return false;
-      return true;
-    });
+    const pass = applyFilters(res.items, cfg);
 
     if (pass.length > 0) return { items: pass, page: res.page };
 
@@ -400,6 +401,16 @@ async function searchPixiv(ctx, cfg, page, word) {
   const err = new Error(`「${word}」没有符合条件的作品`);
   err.status = 200;
   throw err;
+}
+
+// 时段 → 起始日期（官方网页搜索用 scd 参数，实测有效）
+function periodStart(period) {
+  const days = { day: 1, week: 7, month: 30, half_year: 180, year: 365 }[period] || 0;
+  if (!days) return '';
+  const d = new Date(Date.now() - days * 24 * 3600 * 1000);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
 }
 
 async function searchAny(ctx, cfg, page, word) {
@@ -421,9 +432,10 @@ async function searchProxy(ctx, cfg, page, word) {
     'word=' + encodeURIComponent(word),
     'page=' + p,
     'content_type=illust',
-    'sort=date_desc'
+    'sort=' + (cfg.order === 'popular_d' ? 'popular_desc' : 'date_desc')
   ];
   if (cfg.ratio) qs.push('ratio_pattern=' + cfg.ratio);
+  if (cfg.period) qs.push('duration=within_last_' + cfg.period);
 
   const resp = await request(ctx, cfg.apiBase + '/api/pixiv/search?' + qs.join('&'), {
     'Accept': 'application/json',
@@ -463,10 +475,11 @@ async function searchProxy(ctx, cfg, page, word) {
       return true;
     });
 
-  if (items.length === 0) throw new Error('代理接口没有结果');
+  const passed = applyFilters(items, cfg);
+  if (passed.length === 0) throw new Error('代理接口没有符合条件的结果');
 
   const lastPage = Math.min(cfg.maxPage, 50);
-  return { items, page: p >= lastPage ? 1 : p + 1 };
+  return { items: passed, page: p >= lastPage ? 1 : p + 1 };
 }
 
 async function fetchSearchPage(ctx, cfg, word, p) {
@@ -478,9 +491,12 @@ async function fetchSearchPage(ctx, cfg, word, p) {
     `s_mode=${cfg.wordMode}`,
     'type=all',                        // 服务端 type 参数无效，过滤在本地做
     'lang=zh'
-  ].join('&');
+  ];
+  if (cfg.period) qs.push('scd=' + periodStart(cfg.period));
 
-  const url = `https://www.pixiv.net/ajax/search/artworks/${encodeURIComponent(word)}?${qs}`;
+  const joined = qs.join('&');
+
+  const url = `https://www.pixiv.net/ajax/search/artworks/${encodeURIComponent(word)}?${joined}`;
   const resp = await request(ctx, url, {
     'Accept': 'application/json',
     'Referer': 'https://www.pixiv.net/',
@@ -684,6 +700,18 @@ async function trendingTags(ctx, cfg) {
   } catch (_) {
     return [];
   }
+}
+
+/* ========================= 作品过滤 ========================= */
+
+// AI 与排除标签统一在这里处理：两个搜索源都要经过
+function applyFilters(items, cfg) {
+  return items.filter(it => {
+    if (cfg.aiMode === 'only' && !it.ai) return false;
+    if (cfg.aiMode === 'exclude' && it.ai) return false;
+    if (isExcluded(it, cfg.excludeTags)) return false;
+    return true;
+  });
 }
 
 /* ========================= 标签排除 ========================= */
