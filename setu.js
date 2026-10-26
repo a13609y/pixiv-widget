@@ -80,6 +80,12 @@ export default async function(ctx) {
     return buildAccessory(ctx, family, cfg);
   }
 
+  // 抓包脚本最后被调用的时间（没有通知也能验证脚本有没有在跑）
+  const seenAt = Number(ctx.storage.get('pixiv_seen_at') || 0) || 0;
+  const seenText = seenAt
+    ? new Date(seenAt).toTimeString().slice(0, 5)
+    : '无';
+
   const cached = readJSON(ctx, K.cache + family);
   const lastShow = Number(ctx.storage.get(K.lastShow + family) || 0) || 0;
   const remaining = cooldownMs - (now - lastShow);
@@ -194,6 +200,7 @@ export default async function(ctx) {
     aspect: candidate.__aspect || null,
     searches,
     wordSource: picked ? picked.source : '',
+    seenText,
     origin: candidate.url,
     url: img.url,
     dataUri: img.dataUri,
@@ -217,6 +224,7 @@ export default async function(ctx) {
     aiMode: cfg.aiMode,
     word: typeof word === 'string' ? word : '',
     wordSource: picked ? picked.source : '',
+    seenText,
     cookie: cfg.cookie ? 'on' : 'off',
     error: lastError || null
   });
@@ -689,7 +697,7 @@ function buildWidget(entry, family, cfg, refreshAfter) {
     if (cfg.debug && entry.aspect) {
       lines.push({
         type: 'text',
-        text: `${cfg.cookie ? '🔑' : '🔒'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band} · ${entry.wordSource || '-'} · p${entry.searches || 0}`,
+        text: `${cfg.cookie ? '🔑' : '🔒'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band} · ${entry.wordSource || '-'} · 拦截${entry.seenText || seenText}`,
         font: { size: 'caption2' },
         textColor: 'rgba(255,255,255,0.55)',
         maxLines: 1
