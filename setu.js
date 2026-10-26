@@ -185,6 +185,7 @@ export default async function(ctx) {
     tags: Array.isArray(candidate.tags) ? candidate.tags.slice(0, 8) : [],
     aspect: candidate.__aspect || null,
     searches,
+    wordSource: picked ? picked.source : '',
     origin: candidate.url,
     url: img.url,
     dataUri: img.dataUri,
@@ -667,7 +668,7 @@ function buildWidget(entry, family, cfg, refreshAfter) {
     if (cfg.debug && entry.aspect) {
       lines.push({
         type: 'text',
-        text: `ar ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band} · p${entry.searches || 0}`,
+        text: `${cfg.cookie ? '🔑' : '🔒'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band} · ${entry.wordSource || '-'} · p${entry.searches || 0}`,
         font: { size: 'caption2' },
         textColor: 'rgba(255,255,255,0.55)',
         maxLines: 1
