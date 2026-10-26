@@ -68,7 +68,7 @@ export default async function(ctx) {
   const envCookie = String((ctx.env && ctx.env.PIXIV_COOKIE) || '').trim();
   const autoSid = (ctx.storage.get('pixiv_phpsessid') || '').trim();
   const autoState = ctx.storage.get('pixiv_phpsessid_state') || '';
-  cfg.cookie = envCookie || (autoState === 'login' ? autoSid : '');
+  cfg.cookie = envCookie || ((autoState === 'login' || autoState === 'unknown') ? autoSid : '');
   cfg.trendingEnabled = cfg.trendingMode === 'on'
     || (cfg.trendingMode === 'auto' && !!cfg.cookie);
   const cooldownMs = cfg.cooldownMin > 0 ? cfg.cooldownMin * 60000 : 0;

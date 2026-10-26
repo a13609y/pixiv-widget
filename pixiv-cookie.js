@@ -3,7 +3,7 @@
 // @Platform     Egern
 // @Type         http_request
 // @Author       Cuttlefish
-// @Version      1.1.0
+// @Version      1.2.0
 // ==/UserScript==
 
 /* ================================================================
@@ -34,19 +34,33 @@ const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/6
 
 export default async function (ctx) {
   try {
-    const raw = ctx.request.headers.get('cookie') || '';
+    // Cookie 头可能被合并成一条（用 ; 或 , 或空格分隔），先用 getAll 拿全再拼
+    let raw = '';
+    try {
+      const all = ctx.request.headers.getAll ? ctx.request.headers.getAll('cookie') : null;
+      if (Array.isArray(all) && all.length) raw = all.join('; ');
+    } catch (_) {}
+    if (!raw) raw = ctx.request.headers.get('cookie') || '';
+
     const now = Date.now();
     ctx.storage.set('pixiv_seen_at', String(now));
 
-    const m = /(?:^|;\s*)PHPSESSID=([0-9A-Za-z]{16,64})/.exec(raw);
+    // 宽松匹配：允许前后是 ; 、逗号、空格、行首
+    const m = /(?:^|[;,\s])\s*PHPSESSID\s*=\s*([0-9A-Za-z%._-]{8,128})/i.exec(raw);
 
-    // 拦截到了，但这条请求没有 Cookie —— 用来判断 MITM 通没通
+    // 拦截到了，但没找到 PHPSESSID —— 用来判断 MITM 通没通、Cookie 里都有什么
     if (!m) {
+      const names = raw
+        .split(/[;,\s]+/)
+        .map(x => x.split('=')[0])
+        .filter(Boolean)
+        .slice(0, 10);
+      ctx.storage.set('pixiv_cookie_keys', names.join(','));
       if (!ctx.storage.get(KEY_SEEN)) {
         ctx.storage.set(KEY_SEEN, String(now));
         ctx.notify({
-          title: '✅ MITM 已生效',
-          body: '脚本已拦截到 pixiv.net 请求，但这条没带 Cookie。如果一直没收到 🔑，请在浏览器确认已登录。',
+          title: '✅ MITM 已生效（未发现 PHPSESSID）',
+          body: '这条请求的 Cookie 里有：' + (names.length ? names.join(', ') : '（空）'),
           sound: false
         });
       }
@@ -55,6 +69,8 @@ export default async function (ctx) {
 
     const sid = m[1];
     ctx.storage.set(KEY_AT, String(now));
+    // 先存下来：万一验证请求失败，至少小组件能拿到它
+    ctx.storage.set(KEY_SID, sid);
 
     const prevSid = ctx.storage.get(KEY_SID) || '';
     const prevState = ctx.storage.get(KEY_STATE) || '';
@@ -64,6 +80,7 @@ export default async function (ctx) {
     if (!sidChanged && now - lastCheck < RECHECK_MS) return;
 
     let state = null;
+    let netErr = '';
     try {
       const resp = await ctx.http.get('https://www.pixiv.net/ajax/search/trending/tags?lang=zh', {
         headers: {
@@ -76,7 +93,22 @@ export default async function (ctx) {
       });
       const body = await resp.json().catch(() => null);
       if (body) state = body.error === false ? 'login' : 'guest';
-    } catch (_) {
+    } catch (e) {
+      netErr = String((e && e.message) || e || '网络错误');
+    }
+
+    if (!state) {
+      // 验证失败：保留 Cookie，标成 unknown，让小组件可以试着用；每 30 分钟最多提示一次
+      const lastWarn = Number(ctx.storage.get('pixiv_verify_warn') || 0) || 0;
+      if (!prevState) ctx.storage.set(KEY_STATE, 'unknown');
+      if (now - lastWarn > 30 * 60 * 1000) {
+        ctx.storage.set('pixiv_verify_warn', String(now));
+        ctx.notify({
+          title: '⚠️ 抓到 Cookie，但验证失败',
+          body: netErr.slice(0, 120) + '（Cookie 已保存，稍后自动重试）',
+          sound: false
+        });
+      }
       return;
     }
 
