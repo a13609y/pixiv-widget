@@ -56,6 +56,10 @@ env_schema:
   SHOW_INFO:
     name: 显示标题作者
     options: ["true", "false"]
+  PIXIV_COOKIE:
+    name: 手动 Cookie（可选）
+    description: 自动抓不到时，从浏览器/抓包里复制 PHPSESSID 粘这里（可整串 Cookie，会自动提取）
+    default_value: ""
   DEBUG:
     name: 调试角标
     description: 图上显示 🔑/🔒 与画幅、词来源

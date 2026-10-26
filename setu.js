@@ -65,7 +65,7 @@ export default async function(ctx) {
   const now = Date.now();
 
   // Cookie 来源：env 手填优先；否则用 http_request 脚本抓到的「已验证登录态」
-  const envCookie = String((ctx.env && ctx.env.PIXIV_COOKIE) || '').trim();
+  const envCookie = normalizeCookie(String((ctx.env && ctx.env.PIXIV_COOKIE) || ''));
   const autoSid = (ctx.storage.get('pixiv_phpsessid') || '').trim();
   const autoState = ctx.storage.get('pixiv_phpsessid_state') || '';
   cfg.cookie = envCookie || ((autoState === 'login' || autoState === 'unknown') ? autoSid : '');
@@ -216,6 +216,14 @@ export default async function(ctx) {
 }
 
 /* ============================ 配置 ============================ */
+
+// 手动输入容错：允许直接粘整串 Cookie（含 PHPSESSID= 和其他键），也允许只粘 32 位值
+function normalizeCookie(raw) {
+  const v = String(raw || '').trim().replace(/^["']|["']$/g, '');
+  if (!v) return '';
+  const m = /PHPSESSID\s*=\s*([0-9A-Za-z%._-]{8,128})/i.exec(v);
+  return m ? m[1] : v.replace(/\s+/g, '');
+}
 
 function readConfig(env) {
   const s = (k, d) => {
