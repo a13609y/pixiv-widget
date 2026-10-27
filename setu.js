@@ -318,6 +318,10 @@ const VALUE_MAP = {
     '第三方代理': 'proxy', 'proxy': 'proxy',
     '官方网页': 'web', 'web': 'web'
   },
+  r18: {
+    '排除R18': false, '排除': false, 'false': false, 'off': false, '关闭': false,
+    '允许R18': true, '允许': true, 'true': true, 'on': true, '开启': true
+  },
   cookieSource: {
     '手动优先': 'manual', 'manual': 'manual',
     '自动优先': 'auto', 'auto': 'auto',
@@ -375,6 +379,7 @@ function readConfig(env) {
     ratio: pickMapped(s('RATIO', '自动'), VALUE_MAP.ratio, ''),
     period: pickMapped(s('PERIOD', '不限'), VALUE_MAP.period, ''),
     cookieMode: pickMapped(s('COOKIE_SOURCE', '手动优先'), VALUE_MAP.cookieSource, 'manual'),
+    r18: pickMapped(s('R18', '排除R18'), VALUE_MAP.r18, false),
     apiBase: s('API_BASE', 'https://api.cocomi.eu.org').replace(/\/+$/, ''),
     keyword: s('KEYWORD', ''),
     pixivWord: s('PIXIV_WORD', ''),
@@ -405,7 +410,7 @@ function uiSignature(cfg) {
 }
 
 function signature(cfg) {
-  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.period, cfg.apiBase].join('|');
+  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.period, cfg.apiBase, cfg.r18].join('|');
 }
 
 function nextIso(minutes) {
@@ -503,6 +508,7 @@ async function searchProxy(ctx, cfg, page, word) {
         height: it.height,
         pageCount: it.page_count,
         ai: it.illust_ai_type === 2,
+        r18: it.x_restrict === 1 || it.x_restrict === 2 || it.restrict === 1,
         url: urls.square_medium || urls.medium || urls.large || ''
       };
     })
@@ -524,7 +530,7 @@ async function fetchSearchPage(ctx, cfg, word, p) {
   const qs = [
     `word=${encodeURIComponent(word)}`,
     `order=${cfg.order}`,
-    'mode=safe',                        // 固定全年龄
+    cfg.r18 ? 'mode=all' : 'mode=safe',  // 关闭时只取全年龄
     `p=${p}`,
     `s_mode=${cfg.wordMode}`,
     'type=all',                        // 服务端 type 参数无效，过滤在本地做
@@ -569,6 +575,7 @@ async function fetchSearchPage(ctx, cfg, word, p) {
       height: it.height,
       pageCount: it.pageCount,
       ai: it.aiType === 2,           // 2 = 投稿者标注 AI 生成
+      r18: it.xRestrict === 1 || it.xRestrict === 2,
       url: String(it.url)
     }))
     .filter(it => /\.(png|jpe?g|gif|webp)$/i.test(it.url.split('?')[0]))
@@ -755,6 +762,8 @@ async function trendingTags(ctx, cfg) {
 // AI 与排除标签统一在这里处理：两个搜索源都要经过
 function applyFilters(items, cfg) {
   return items.filter(it => {
+    // 第三方接口无视 mode/r18 参数，只能本地按 x_restrict 排
+    if (!cfg.r18 && it.r18) return false;
     if (cfg.aiMode === 'only' && !it.ai) return false;
     if (cfg.aiMode === 'exclude' && it.ai) return false;
     if (isExcluded(it, cfg.excludeTags)) return false;
