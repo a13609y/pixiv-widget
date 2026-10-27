@@ -319,8 +319,9 @@ const VALUE_MAP = {
     '官方网页': 'web', 'web': 'web'
   },
   r18: {
-    '排除R18': false, '排除': false, 'false': false, 'off': false, '关闭': false,
-    '允许R18': true, '允许': true, 'true': true, 'on': true, '开启': true
+    '排除R18': 'none', '排除': 'none', 'false': 'none', 'off': 'none', '关闭': 'none',
+    '只要R18': 'only', 'only': 'only',
+    '全部': 'all', '允许R18': 'all', '允许': 'all', 'true': 'all', 'on': 'all', '开启': 'all'
   },
   cookieSource: {
     '手动优先': 'manual', 'manual': 'manual',
@@ -379,7 +380,7 @@ function readConfig(env) {
     ratio: pickMapped(s('RATIO', '自动'), VALUE_MAP.ratio, ''),
     period: pickMapped(s('PERIOD', '不限'), VALUE_MAP.period, ''),
     cookieMode: pickMapped(s('COOKIE_SOURCE', '手动优先'), VALUE_MAP.cookieSource, 'manual'),
-    r18: pickMapped(s('R18', '排除R18'), VALUE_MAP.r18, false),
+    r18Mode: pickMapped(s('R18', '排除R18'), VALUE_MAP.r18, 'none'),
     apiBase: s('API_BASE', 'https://api.cocomi.eu.org').replace(/\/+$/, ''),
     keyword: s('KEYWORD', ''),
     pixivWord: s('PIXIV_WORD', ''),
@@ -410,7 +411,7 @@ function uiSignature(cfg) {
 }
 
 function signature(cfg) {
-  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.period, cfg.apiBase, cfg.r18].join('|');
+  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.period, cfg.apiBase, cfg.r18Mode].join('|');
 }
 
 function nextIso(minutes) {
@@ -433,6 +434,9 @@ async function searchPixiv(ctx, cfg, page, word) {
     if (attempt === 0 && p < res.lastPage) { p = p + 1; continue; }
 
     let msg = '这一页没有符合条件的作品';
+    if (cfg.r18Mode === 'only' && cfg.source !== 'proxy') {
+      msg = '网页端未登录拿不到 R18：请改用第三方代理，或登录后保存 Cookie';
+    }
     if (cfg.aiMode === 'only') msg = `「${word}」这一页没有 AI 作品，换个更 AI 向的标签试试（如 AIイラスト）`;
     else if (cfg.excludeTags.length) msg = `这一页的作品都被 EXCLUDE_TAGS 排掉了：${cfg.excludeTags.join('/')}`;
     else if (cfg.type === 'illust') msg = '这一页只有漫画/动图，已按 TYPE=illust 跳过';
@@ -530,7 +534,7 @@ async function fetchSearchPage(ctx, cfg, word, p) {
   const qs = [
     `word=${encodeURIComponent(word)}`,
     `order=${cfg.order}`,
-    cfg.r18 ? 'mode=all' : 'mode=safe',  // 关闭时只取全年龄
+    cfg.r18Mode === 'none' ? 'mode=safe' : 'mode=all',  // 排除时只取全年龄
     `p=${p}`,
     `s_mode=${cfg.wordMode}`,
     'type=all',                        // 服务端 type 参数无效，过滤在本地做
@@ -763,7 +767,8 @@ async function trendingTags(ctx, cfg) {
 function applyFilters(items, cfg) {
   return items.filter(it => {
     // 第三方接口无视 mode/r18 参数，只能本地按 x_restrict 排
-    if (!cfg.r18 && it.r18) return false;
+    if (cfg.r18Mode === 'none' && it.r18) return false;
+    if (cfg.r18Mode === 'only' && !it.r18) return false;
     if (cfg.aiMode === 'only' && !it.ai) return false;
     if (cfg.aiMode === 'exclude' && it.ai) return false;
     if (isExcluded(it, cfg.excludeTags)) return false;

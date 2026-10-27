@@ -38,8 +38,8 @@ env_schema:
     options: ["只要插画", "只要漫画", "插画+漫画"]
   R18:
     name: R18 过滤 【通用】
-    description: "排除R18=本地按 x_restrict 过滤（第三方接口无视 r18 参数，必须本地排）；允许R18 需要登录 Cookie，免登录仍拿不到"
-    options: ["排除R18", "允许R18"]
+    description: "排除R18=只要全年龄（默认）；只要R18=只取 R18，建议配第三方代理；全部=不过滤。第三方接口无视 r18 参数，一律本地按 x_restrict 筛"
+    options: ["排除R18", "只要R18", "全部"]
   AI_MODE:
     name: AI 作品 【通用】
     description: "按 illust_ai_type 本地过滤，两个源都生效（比接口自带开关可靠）"
