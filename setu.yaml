@@ -128,8 +128,13 @@ env_schema:
     name: 画幅匹配 【仅网页】
     description: "官方网页模式本地挑画幅用；代理模式选过画幅后自动关闭（避免白翻页）"
     options: ["自动匹配", "纯随机"]
-  SHOW_INFO:
-    name: 显示标题作者 【通用】
+  SHOW_TITLE:
+    name: 显示标题 【通用】
+    description: "关掉只留作者，或两个都关掉看纯图"
+    options: ["true", "false"]
+  SHOW_AUTHOR:
+    name: 显示作者 【通用】
+    description: "小号尺寸不显示作者（位置不够），中号及以上才生效"
     options: ["true", "false"]
   DEBUG:
     name: 调试角标 【通用】

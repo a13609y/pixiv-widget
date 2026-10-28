@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.8';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.9';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -506,7 +506,9 @@ function readConfig(env, family) {
     quality: pickMapped(s('IMAGE_QUALITY', '自动'), VALUE_MAP.quality, 'auto'),
     imgHost: host,
     aspectFit: pickMapped(s('ASPECT_FIT', '自动匹配'), VALUE_MAP.aspect, 'auto') !== 'off',
-    showInfo: bool('SHOW_INFO', true),
+    // 标题、作者分开控制；两个都没填时沿用旧的 SHOW_INFO
+    showTitle: bool('SHOW_TITLE', bool('SHOW_INFO', true)),
+    showAuthor: bool('SHOW_AUTHOR', bool('SHOW_INFO', true)),
     debug: bool('DEBUG', false),
     textColor: s('TEXT_COLOR', '#FFFFFF'),
     timeoutMs: int('REQUEST_TIMEOUT', 15, 5, 60) * 1000
@@ -514,7 +516,7 @@ function readConfig(env, family) {
 }
 
 function uiSignature(cfg) {
-  return [cfg.showInfo, cfg.debug, cfg.textColor].join('|');
+  return [cfg.showTitle, cfg.showAuthor, cfg.debug, cfg.textColor].join('|');
 }
 
 function signature(cfg) {
@@ -1079,12 +1081,14 @@ function toBase64(bytes) {
 
 function buildWidget(entry, family, cfg, refreshAfter) {
   const isSmall = family === 'systemSmall';
-  const showInfo = cfg.showInfo && entry && (entry.title || entry.author);
   const children = [];
   const lines = [];
 
-  if (showInfo) {
-    if (entry.title) {
+  const showTitle = cfg.showTitle && entry && entry.title;
+  const showAuthor = cfg.showAuthor && !isSmall && entry && entry.author;
+
+  if (showTitle || showAuthor) {
+    if (showTitle) {
       lines.push({
         type: 'text',
         text: entry.title,
@@ -1094,7 +1098,7 @@ function buildWidget(entry, family, cfg, refreshAfter) {
         minScale: 0.7
       });
     }
-    if (!isSmall && entry.author) {
+    if (showAuthor) {
       lines.push({
         type: 'text',
         text: `@${entry.author}`,
@@ -1126,10 +1130,12 @@ function buildWidget(entry, family, cfg, refreshAfter) {
       direction: 'column',
       alignItems: 'start',
       gap: 2,
-      padding: [10, 12],
+      padding: [32, 12, 10, 12],       // 上方留 32pt 专门给渐变过渡，避免出现"一刀切"的分割线
       backgroundGradient: {
         type: 'linear',
-        colors: ['rgba(0,0,0,0)', 'rgba(0,0,0,0.78)'],
+        // 四段缓入：0 → 0.08 → 0.42 → 0.86，比原来两段直接 0→0.78 平滑得多
+        colors: ['rgba(0,0,0,0)', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.42)', 'rgba(0,0,0,0.86)'],
+        stops: [0, 0.3, 0.62, 1],
         startPoint: { x: 0.5, y: 0 },
         endPoint: { x: 0.5, y: 1 }
       },
