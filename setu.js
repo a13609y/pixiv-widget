@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.6';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.7';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -68,7 +68,8 @@ const K = {
 const DEFAULT_HOST = 'i.pixiv.re';
 const FALLBACK_HOSTS = ['i.pixiv.re', 'i.pixiv.nl'];   // i.pixiv.cat 已全站 500，实测 i.pixiv.nl 可用
 const PAGE_SIZE = 36;   // Pixiv 网页搜索固定每页 36 条
-const MAX_POOL = 240;   // 候选池上限（只存元数据，很小）
+const MAX_POOL = 240;
+const DEEP_MAX_PAGE = 50;   // 「重复即重拉」时最多翻到第几页（代理实测 60 页还有货，这里保守取 50）   // 候选池上限（只存元数据，很小）
 
 export default async function(ctx) {
   const family = ctx.widgetFamily || 'systemSmall';
@@ -145,8 +146,22 @@ export default async function(ctx) {
   let pool = readJSON(ctx, poolKey) || {};
   if (!Array.isArray(pool.items)) pool.items = [];
   // 搜索参数变了、或池子闲置超过 12 小时，都作废重来
-  if (pool.sig !== sig || !pool.ts || now - pool.ts > 12 * 3600 * 1000) {
-    pool = { items: [], ts: now, page: 1, sig };   // 配置变了 / 闲置超 12h：连搜索词一起重选
+  const poolTtlMs = cfg.poolTtlH > 0 ? cfg.poolTtlH * 3600 * 1000 : Infinity;
+  const poolAge = now - (pool.createdAt || pool.ts || now);
+  const poolIdle = now - (pool.ts || 0);
+  const sigChanged = pool.sig !== sig;
+  if (sigChanged || !pool.ts || poolAge > poolTtlMs || poolIdle > poolTtlMs) {
+    // 配置变了 → 从第 1 页重来；只是到期（POOL_TTL）→ 丢掉缓存但保留翻页进度和搜索词，
+    // 否则刚重建就要从第 1 页慢慢爬，而前几页全是看过的，会白等好几轮
+    const prev = pool || {};
+    pool = {
+      items: [],
+      ts: now,
+      createdAt: now,
+      page: sigChanged ? 1 : (prev.page || 1),
+      sig
+    };
+    if (!sigChanged && prev.word) pool.word = prev.word;
   }
 
   let lastError = '';
@@ -210,6 +225,34 @@ export default async function(ctx) {
   if (!candidate) {
     candidate = pickFromPool(pool, historySet, family, cfg, false);
     if (candidate) writeJSON(ctx, poolKey, pool);
+  }
+
+  // ③b 池里的图全看过了：按 ON_REPEAT 决定继续往后翻页拿新作品，还是直接轮播旧图
+  if (!candidate && cfg.onRepeat === 'refetch') {
+    for (let i = 0; i < 2 && !candidate; i++) {
+      if (cfg.deadline && Date.now() > cfg.deadline - 6000) break;   // 别把整轮拖过小组件超时
+      try {
+        if (!word) {
+          if (pool.word) { word = pool.word; picked = { source: 'pool' }; }
+          else { picked = await pickWord(ctx, cfg); word = picked.word; pool.word = word; }
+        }
+        const res = await searchAny(ctx, cfg, pool.page || 1, word, true);   // deep：不回卷
+        searches++;
+        const have = new Set(pool.items.map(it => String(it.pid)));
+        const added = res.items.filter(it => it && it.pid && !have.has(String(it.pid)));
+        pool.items = pool.items.concat(added).slice(-MAX_POOL);
+        pool.page = res.page;
+        pool.ts = now;
+        pool.barrenAt = 0;             // 又能翻页了，撤销之前「画幅贫瘠」的抑制
+        writeJSON(ctx, poolKey, pool);
+        candidate = pickFromPool(pool, historySet, family, cfg, true);
+        if (!added.length && res.items.length === 0) break;   // 后面真的没货了
+      } catch (e) {
+        lastError = e.message || '搜索失败';
+        errorStatus = e.status || null;
+        break;
+      }
+    }
   }
 
   // ④ 整个池子都在防重复窗口内 -> 按规则随机重复一张（并记下时间，6 小时内不再反复搜）
@@ -439,6 +482,15 @@ function readConfig(env, family) {
     cookie: '',            // 运行时解析：env > 抓包脚本存储
     trendingEnabled: false,
     cooldownMin: int('COOLDOWN', 30, 0, 24 * 60),
+    // 池子闲置多久后作废重建（0 = 永不）；一直在用（每次挑图都会续 ts）不会重建
+    poolTtlH: (() => {
+      const raw = s('POOL_TTL', '12');
+      if (/不限|永不|never/i.test(raw)) return 0;
+      const n = parseInt(raw, 10);
+      return Number.isFinite(n) ? Math.min(720, Math.max(1, n)) : 12;
+    })(),
+    // 池子全看过时：refetch = 继续往后翻页拿新作品；repeat = 直接轮播旧图
+    onRepeat: /重复旧图|repeat/i.test(s('ON_REPEAT', '重新拉取')) ? 'repeat' : 'refetch',
     // 「永不再重」= 记住 2000 张；其余按数值。默认 100（原来 30，四个尺寸一分就没剩多少）
     maxHistory: (() => {
       let cap;
@@ -472,11 +524,11 @@ function nextIso(minutes) {
 
 /* ============================ 搜索 ============================ */
 
-async function searchPixiv(ctx, cfg, page, word) {
+async function searchPixiv(ctx, cfg, page, word, deep) {
   let p = Math.max(1, page | 0);
   // AI 过滤后可能整页都是空的，允许往后多翻 1 页碰运气（最多 2 次请求）
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await fetchSearchPage(ctx, cfg, word, p);
+    const res = await fetchSearchPage(ctx, cfg, word, p, deep);
 
     const pass = applyFilters(res.items, cfg);
 
@@ -512,24 +564,24 @@ function periodStart(period) {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
-async function searchAny(ctx, cfg, page, word) {
+async function searchAny(ctx, cfg, page, word, deep) {
   // 代理固定 content_type=illust（要漫画只能走网页）；且实测它忽略 sort，
   // 选了「人气最高」时先打代理只会拿到最新，直接改走网页搜索
   const proxyUsable = cfg.source === 'proxy' && cfg.type !== 'manga'
     && !(cfg.order === 'popular_d' && cfg.cookie);   // 未登录时网页也排不出热度，留在代理保住服务端画幅筛选
   if (proxyUsable) {
     try {
-      return await searchProxy(ctx, cfg, page, word);
+      return await searchProxy(ctx, cfg, page, word, deep);
     } catch (e) {
       // 第三方接口挂了就退回官方网页搜索，不让小组件空着
       ctx.storage.set('pixiv_proxy_err', JSON.stringify({ at: Date.now(), msg: String((e && e.message) || e).slice(0, 120) }));
     }
   }
-  return await searchPixiv(ctx, cfg, page, word);
+  return await searchPixiv(ctx, cfg, page, word, deep);
 }
 
 // 第三方 Pixiv 代理（hibiapi 系）：服务端支持 ratio_pattern 横竖方筛选
-async function searchProxy(ctx, cfg, page, word) {
+async function searchProxy(ctx, cfg, page, word, deep) {
   const p = Math.max(1, page | 0);
   const qs = [
     'word=' + encodeURIComponent(word),
@@ -582,11 +634,13 @@ async function searchProxy(ctx, cfg, page, word) {
   const passed = applyFilters(items, cfg);
   if (passed.length === 0) throw new Error('代理接口没有符合条件的结果');
 
-  const lastPage = Math.min(cfg.maxPage, 50);
-  return { items: passed, page: p >= lastPage ? 1 : p + 1 };
+  const lastPage = Math.min(cfg.maxPage, DEEP_MAX_PAGE);
+  // deep：池子看光了就继续往后翻拿新作品，而不是回卷到第 1 页重看一遍
+  const next = deep ? Math.min(DEEP_MAX_PAGE, p + 1) : (p >= lastPage ? 1 : p + 1);
+  return { items: passed, page: next };
 }
 
-async function fetchSearchPage(ctx, cfg, word, p) {
+async function fetchSearchPage(ctx, cfg, word, p, deep) {
   const qs = [
     `word=${encodeURIComponent(word)}`,
     `order=${cfg.order}`,
@@ -649,7 +703,7 @@ async function fetchSearchPage(ctx, cfg, word, p) {
   const total = Number(box.total) || 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   // 只在最前面若干页里循环：越深的页作品越旧，回卷点用 MAX_PAGE 卡住
-  const lastPage = Math.min(totalPages, cfg.maxPage);
+  const lastPage = Math.min(totalPages, deep ? Math.max(cfg.maxPage, 30) : cfg.maxPage);
 
   if (items.length === 0) {
     const err = new Error(p === 1 ? `「${word}」在 Pixiv 没有搜索结果` : '该标签已翻到最后一页');
@@ -657,7 +711,8 @@ async function fetchSearchPage(ctx, cfg, word, p) {
     throw err;
   }
 
-  return { items, page: p >= lastPage ? 1 : p + 1, lastPage };
+  const nextPage = deep ? p + 1 : (p >= lastPage ? 1 : p + 1);
+  return { items, page: nextPage, lastPage };
 }
 
 // 剩余预算：总时限内单次请求最多等 cfg.timeoutMs，预算快用完就缩短，避免整轮超时
