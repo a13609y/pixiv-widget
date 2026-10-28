@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.3';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.4';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -66,7 +66,7 @@ const K = {
 };
 
 const DEFAULT_HOST = 'i.pixiv.re';
-const FALLBACK_HOSTS = ['i.pixiv.re', 'i.pixiv.cat'];
+const FALLBACK_HOSTS = ['i.pixiv.re', 'i.pixiv.nl'];   // i.pixiv.cat 已全站 500，实测 i.pixiv.nl 可用
 const PAGE_SIZE = 36;   // Pixiv 网页搜索固定每页 36 条
 const MAX_POOL = 150;   // 候选池上限（只存元数据，很小）
 
@@ -98,6 +98,8 @@ export default async function(ctx) {
   cfg.trendingEnabled = cfg.trendingMode === 'on'
     || (cfg.trendingMode === 'auto' && !!cfg.cookie);
   const cooldownMs = cfg.cooldownMin > 0 ? cfg.cooldownMin * 60000 : 0;
+  // 整次渲染的时间预算：Egern 给的 60s 里留 15s 余量，超了就不再发新请求
+  cfg.deadline = now + 45 * 1000;
 
   if (family === 'accessoryInline') {
     return { type: 'widget', children: [{ type: 'text', text: 'Pixiv', maxLines: 1 }] };
@@ -143,7 +145,7 @@ export default async function(ctx) {
   if (!Array.isArray(pool.items)) pool.items = [];
   // 搜索参数变了、或池子闲置超过 12 小时，都作废重来
   if (pool.sig !== sig || !pool.ts || now - pool.ts > 12 * 3600 * 1000) {
-    pool = { items: [], ts: now, page: 1, sig };
+    pool = { items: [], ts: now, page: 1, sig };   // 配置变了 / 闲置超 12h：连搜索词一起重选
   }
 
   let lastError = '';
@@ -174,7 +176,11 @@ export default async function(ctx) {
     // 全部看过了、而且刚搜过 -> 不重复消耗请求，直接交给下面的随机兜底
     if (allSeen && seenRecently) break;
     try {
-      if (!word) { picked = await pickWord(ctx, cfg); word = picked.word; }
+      if (!word) {
+        // 池子已经有词就沿用，别每次刷新换一个热门标签把池子搅浑
+        if (pool.word) { word = pool.word; picked = { source: 'pool' }; }
+        else { picked = await pickWord(ctx, cfg); word = picked.word; pool.word = word; }
+      }
       const res = await searchAny(ctx, cfg, pool.page || 1, word);
       searches++;
       pool.items = pool.items.concat(res.items).slice(-MAX_POOL);
@@ -255,6 +261,7 @@ export default async function(ctx) {
     dataUri: img.dataUri,
     uiSig: uiSignature(cfg),
     sig,
+    sortWarn: cfg.source === 'proxy' && cfg.order === 'popular_d',   // 实测代理忽略 sort，只有最新
     proxyWarn: (() => {
       try {
         const r = JSON.parse(ctx.storage.get('pixiv_proxy_err') || 'null');
@@ -493,7 +500,10 @@ function periodStart(period) {
 }
 
 async function searchAny(ctx, cfg, page, word) {
-  if (cfg.source === 'proxy') {
+  // 代理固定 content_type=illust（要漫画只能走网页）；且实测它忽略 sort，
+  // 选了「人气最高」时先打代理只会拿到最新，直接改走网页搜索
+  const proxyUsable = cfg.source === 'proxy' && cfg.type !== 'manga' && cfg.order !== 'popular_d';
+  if (proxyUsable) {
     try {
       return await searchProxy(ctx, cfg, page, word);
     } catch (e) {
@@ -636,11 +646,17 @@ async function fetchSearchPage(ctx, cfg, word, p) {
   return { items, page: p >= lastPage ? 1 : p + 1, lastPage };
 }
 
+// 剩余预算：总时限内单次请求最多等 cfg.timeoutMs，预算快用完就缩短，避免整轮超时
+function budgetMs(cfg, def) {
+  const left = cfg.deadline ? cfg.deadline - Date.now() : def;
+  return Math.max(2500, Math.min(def, left));
+}
+
 async function request(ctx, url, headers, cfg) {
   if (cfg.cookieHeader && !headers['Cookie']) headers['Cookie'] = cfg.cookieHeader;
   let resp;
   try {
-    resp = await ctx.http.get(url, { headers, timeout: cfg.timeoutMs });
+    resp = await ctx.http.get(url, { headers, timeout: budgetMs(cfg, cfg.timeoutMs) });
   } catch (e) {
     const err = new Error('网络不可达 / 超时');
     err.status = 0;
@@ -706,9 +722,17 @@ function matchesRatio(it, ratio) {
   return ar >= 0.85 && ar < 1.4;   // square
 }
 
+// 选了画幅就用画幅定目标，别再按「这个尺寸长什么样」猜（网页模式/Debug 一致）
+function bandsFor(ratio) {
+  if (ratio === 'landscape') return [[1.4, 99], [0.62, 1.45]];
+  if (ratio === 'portrait') return [[0, 0.85], [0.62, 1.45]];
+  if (ratio === 'square') return [[0.85, 1.4], [0.62, 1.45]];
+  return null;
+}
+
 function pickByAspect(items, family, aspectFit, strict, ratio) {
   if (!items || items.length === 0) return null;
-  const target = targetAspect(family);
+  const target = (ratio && RATIO_TARGET[ratio]) || targetAspect(family);
 
   if (!aspectFit) {
     // 指定了画幅就按「离该画幅最近」挑（服务端已筛过时等价于随机，兜底时能挡住方图）
@@ -728,7 +752,7 @@ function pickByAspect(items, family, aspectFit, strict, ratio) {
     return pick;
   }
 
-  const tiers = aspectTiers(family);
+  const tiers = bandsFor(ratio) || aspectTiers(family);
   const scored = items.map(it => {
     const ar = (it.width && it.height) ? it.width / it.height : 0;
     return { it, ar, score: ar > 0 ? Math.abs(Math.log(ar / target)) : 1 };
@@ -763,9 +787,9 @@ function pickByAspect(items, family, aspectFit, strict, ratio) {
 function pickAnyFromPool(pool) {
   if (!pool || !Array.isArray(pool.items) || pool.items.length === 0) return null;
   const idx = Math.floor(Math.random() * pool.items.length);
-  const picked = pool.items.splice(idx, 1)[0];
+  const picked = pool.items[idx];
   if (!picked) return null;
-  picked.__repeat = true;
+  picked.__repeat = true;   // 只标记，不把条目从池子里摘掉，否则池子会被慢慢掏空
   return picked;
 }
 
@@ -867,8 +891,9 @@ function imageStem(rawUrl) {
   path = path.replace(/^\/c\/[^/]+\//, '/');   // 去掉 CDN 的 /c/250x250_80_a2/
   path = path.replace('/img-original/', '/img-master/');
   path = path.replace('/custom-thumb/', '/img-master/'); // 自定义缩略图的作品，原图仍在 img-master
-  const fm = /^(.*_p\d+?)(?:_square1200|_master1200|_custom1200)?\.(?:png|jpe?g|gif|webp)$/i.exec(path);
-  return fm ? fm[1] : null;
+  // 连扩展名一起留下：png 作品拼成 .jpg 会 404（pixiv 的 1200 档后缀跟原图一致）
+  const fm = /^(.*_p\d+?)(?:_square1200|_master1200|_custom1200)?\.(png|jpe?g|gif|webp)$/i.exec(path);
+  return fm ? { stem: fm[1], ext: fm[2].toLowerCase() } : null;
 }
 
 function hostOf(url) {
@@ -877,20 +902,27 @@ function hostOf(url) {
 }
 
 function candidateSources(item, cfg, family) {
-  const stem = imageStem(item.url);
-  if (!stem) return [item.url]; // 推不出来就直连原地址
+  const info = imageStem(item.url);
+  if (!info) return [item.url]; // 推不出来就直连原地址
 
+  // 原图后缀优先，再退回 jpg/png（有些作品的 1200 档只在其中一种后缀下存在）
+  const exts = [info.ext].concat(['jpg', 'png'].filter(e => e !== info.ext));
   const hosts = [cfg.imgHost].concat(FALLBACK_HOSTS.filter(h => h !== cfg.imgHost));
-  const master = hosts.map(h => `https://${h}${stem}_master1200.jpg`);
-  const square = hosts.map(h => `https://${h}/c/540x540_70${stem}_square1200.jpg`);
+  const master = [];
+  const square = [];
+  for (const h of hosts) {
+    for (const e of exts) master.push(`https://${h}${info.stem}_master1200.${e}`);
+    square.push(`https://${h}/c/540x540_70${info.stem}_square1200.jpg`);
+  }
 
   const quality = cfg.quality === 'auto'
     ? (family === 'systemSmall' ? 'thumb' : 'master')
     : cfg.quality;
 
+  // 中号/大号绝不拿方图打头：_square1200 是 1200 的方裁图，等比只有 _master1200
   return quality === 'thumb'
-    ? square.concat(master.slice(0, 1))
-    : master.concat(square.slice(0, 1));
+    ? square.concat(master.slice(0, 2))
+    : master.slice(0, 3).concat(square.slice(0, 1));
 }
 
 async function download(ctx, url, cfg) {
@@ -898,7 +930,7 @@ async function download(ctx, url, cfg) {
   try {
     resp = await ctx.http.get(url, {
       headers: { 'Referer': 'https://www.pixiv.net/', 'User-Agent': 'Egern/PixivWidget 4.0' },
-      timeout: cfg.timeoutMs
+      timeout: budgetMs(cfg, cfg.timeoutMs)
     });
   } catch (e) {
     const err = new Error('图片下载超时');
@@ -920,7 +952,11 @@ async function download(ctx, url, cfg) {
 
   const buf = await resp.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  if (bytes.byteLength < 1024) {
+  const looksImage = (bytes[0] === 0xff && bytes[1] === 0xd8)      // jpeg
+    || (bytes[0] === 0x89 && bytes[1] === 0x50)                    // png
+    || (bytes[0] === 0x47 && bytes[1] === 0x49)                    // gif
+    || (bytes[8] === 0x57 && bytes[9] === 0x45);                   // webp
+  if (bytes.byteLength < 1024 || !looksImage) {
     const err = new Error('图片内容异常');
     err.status = 0;
     throw err;
@@ -985,7 +1021,7 @@ function buildWidget(entry, family, cfg, refreshAfter) {
     if (cfg.debug && entry.aspect) {
       lines.push({
         type: 'text',
-        text: `${SCRIPT_VER} ${cfg.cookie ? '🔑' : '🔒'} ${cfg.ratio || '自动'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band}${entry.repeat ? ' · ♻重复' : ''}${entry.proxyWarn ? ' · ⚠代理回退' : ''} · ${entry.wordSource || '-'} · 拦截${entry.seenText || seenText}`,
+        text: `${SCRIPT_VER} ${cfg.cookie ? '🔑' : '🔒'} ${cfg.ratio || '自动'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band}${entry.repeat ? ' · ♻重复' : ''}${entry.proxyWarn ? ' · ⚠代理回退' : ''}${entry.sortWarn ? ' · ↗网页排序' : ''} · ${entry.wordSource || '-'} · 拦截${entry.seenText || '无'}`,
         font: { size: 'caption2' },
         textColor: 'rgba(255,255,255,0.55)',
         maxLines: 1
