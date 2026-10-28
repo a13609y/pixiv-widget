@@ -26,7 +26,7 @@ env_schema:
     options: ["最新发布", "人气最高"]
   PERIOD:
     name: 时段 【通用】
-    description: "只取最近这段时间发布的作品：代理用 duration 参数，官方网页用 scd 参数，两边都实测有效"
+    description: "只取最近这段时间发布的作品：代理用 duration 参数，官方网页用 scd 参数，两边都实测有效。时段变了会重建候选池（从第 1 页重来）"
     options: ["不限", "一天内", "一周内", "一个月内", "半年内", "一年内"]
   RATIO:
     name: 画幅·全局 【仅代理】
@@ -104,6 +104,10 @@ env_schema:
     name: 换图间隔 【通用】
     description: 分钟，0 表示每次刷新都换
     default_value: "30"
+  POOL_SIZE:
+    name: 池子大小 【通用】
+    description: "候选池最多缓存多少条作品。越大越耐看、越省请求；只占几 KB 元数据，不存图片"
+    options: ["120", "240", "480", "960"]
   POOL_TTL:
     name: 池子有效期 【通用】
     description: "候选池闲置多少小时后作废重建（一直在用不会重建）；不限 = 永不自动作废"

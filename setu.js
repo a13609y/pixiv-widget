@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.7';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.8';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -201,7 +201,7 @@ export default async function(ctx) {
       searches++;
       const have = new Set(pool.items.map(it => String(it.pid)));
       const added = res.items.filter(it => it && it.pid && !have.has(String(it.pid)));
-      pool.items = pool.items.concat(added).slice(-MAX_POOL);
+      pool.items = pool.items.concat(added).slice(-cfg.poolSize);
       pool.page = res.page;
       pool.ts = now;
       writeJSON(ctx, poolKey, pool);
@@ -240,7 +240,7 @@ export default async function(ctx) {
         searches++;
         const have = new Set(pool.items.map(it => String(it.pid)));
         const added = res.items.filter(it => it && it.pid && !have.has(String(it.pid)));
-        pool.items = pool.items.concat(added).slice(-MAX_POOL);
+        pool.items = pool.items.concat(added).slice(-cfg.poolSize);
         pool.page = res.page;
         pool.ts = now;
         pool.barrenAt = 0;             // 又能翻页了，撤销之前「画幅贫瘠」的抑制
@@ -453,6 +453,8 @@ function readConfig(env, family) {
     .filter(Boolean)
     .slice(0, max);
 
+  const poolSize = int('POOL_SIZE', MAX_POOL, 60, 2000);
+
   let host = s('IMG_HOST', DEFAULT_HOST)
     .replace(/^https?:\/\//i, '')
     .replace(/\/.*$/, '');
@@ -482,6 +484,7 @@ function readConfig(env, family) {
     cookie: '',            // 运行时解析：env > 抓包脚本存储
     trendingEnabled: false,
     cooldownMin: int('COOLDOWN', 30, 0, 24 * 60),
+    poolSize,   // 候选池最多存多少条（只影响缓存，不影响每次翻页取多少）
     // 池子闲置多久后作废重建（0 = 永不）；一直在用（每次挑图都会续 ts）不会重建
     poolTtlH: (() => {
       const raw = s('POOL_TTL', '12');
@@ -498,7 +501,7 @@ function readConfig(env, family) {
       if (/永不再重|永久|forever/i.test(raw)) cap = 2000;
       else cap = int('NO_REPEAT', int('MAX_HISTORY', 100, 1, 2000), 1, 2000);
       // 窗口至少要能装下整个候选池，否则「池子还没走完就有图掉出窗口」→ 提前复现
-      return Math.max(cap, MAX_POOL);
+      return Math.max(cap, poolSize);
     })(),
     quality: pickMapped(s('IMAGE_QUALITY', '自动'), VALUE_MAP.quality, 'auto'),
     imgHost: host,
