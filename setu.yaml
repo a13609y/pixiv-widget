@@ -29,9 +29,25 @@ env_schema:
     description: "只取最近这段时间发布的作品：代理用 duration 参数，官方网页用 scd 参数，两边都实测有效"
     options: ["不限", "一天内", "一周内", "一个月内", "半年内", "一年内"]
   RATIO:
-    name: 画幅 【仅代理】
-    description: "服务器直接返回指定画幅，横图命中率 100%；官方网页模式下忽略此项（改由本地挑）。可给每个尺寸单独建一条 widget 配置，各填不同画幅（候选池按画幅分槽，互不干扰）"
+    name: 画幅·全局 【仅代理】
+    description: "各尺寸填「跟随全局」时用这里的画幅。自动=服务端不筛，按尺寸本地挑（中号优先横图、小号优先方图）；官方网页模式下整项忽略"
     options: ["自动", "横图", "方图", "竖图"]
+  RATIO_SMALL:
+    name: 画幅·小号 【仅代理】
+    description: "服务器直接返回指定画幅，命中率 100%。跟随全局=用上面的画幅"
+    options: ["跟随全局", "横图", "方图", "竖图"]
+  RATIO_MEDIUM:
+    name: 画幅·中号 【仅代理】
+    description: "推荐填「横图」，中号 2.1:1 不会再出现方图兜底"
+    options: ["跟随全局", "横图", "方图", "竖图"]
+  RATIO_LARGE:
+    name: 画幅·大号 【仅代理】
+    description: "大号 1:1 左右，推荐填「方图」或跟随全局"
+    options: ["跟随全局", "横图", "方图", "竖图"]
+  RATIO_XLARGE:
+    name: 画幅·超大号 【仅代理】
+    description: "iPad 超大号（约 2:1）。锁屏 accessory 不使用此项"
+    options: ["跟随全局", "横图", "方图", "竖图"]
   TYPE:
     name: 作品类型 【仅网页】
     description: "第三方代理固定只返回插画，此项仅在官方网页模式生效"
@@ -134,18 +150,6 @@ widgets:
   - name: 每日美图
     script_name: PixivWidget
     env:
-      TYPE: "illust"
-      MAX_PAGE: "3"
-      TRENDING: "auto"
-      COOLDOWN: "30"
-
-  # 想给某个尺寸单独指定画幅就再建一条同 script_name 的配置，
-  # 然后在 iOS 里对该尺寸的小组件「编辑小组件」时选它。
-  # 候选池按 画幅|时段 分槽，两条配置各自翻页、互不清池；防重复历史仍全局共享。
-  - name: 每日美图-横
-    script_name: PixivWidget
-    env:
-      RATIO: "横图"
       TYPE: "illust"
       MAX_PAGE: "3"
       TRENDING: "auto"

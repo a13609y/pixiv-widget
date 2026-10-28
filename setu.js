@@ -21,8 +21,10 @@
  *
  * ── 环境变量（全部可选）────────────────────────────────────────
  * SOURCE         搜索源：第三方代理（默认，支持服务端横竖方筛选）/ 官方网页
- * RATIO          画幅筛选（仅第三方代理有效）：自动 / 横图 / 方图 / 竖图
- *                每条 widget 配置可各填一个画幅（比如中号横图、小号方图）；
+ * RATIO          画幅筛选·全局（仅第三方代理有效）：自动 / 横图 / 方图 / 竖图
+ * RATIO_SMALL / MEDIUM / LARGE / XLARGE
+ *                各尺寸单独的画幅，优先于 RATIO；填「跟随全局」就用 RATIO
+ *                （小号 / 中号 / 大号 / 超大号-iPad 各自独立，一个 widget 配置即可）
  *                候选池按「画幅|时段」分槽，不同画幅互不清池、各自保留翻页游标，
  *                history 仍全局共享，跨尺寸依然不会重复出图
  * API_BASE       第三方接口地址，默认 https://api.cocomi.eu.org
@@ -68,7 +70,7 @@ const MAX_POOL = 150;   // 候选池上限（只存元数据，很小）
 
 export default async function(ctx) {
   const family = ctx.widgetFamily || 'systemSmall';
-  const cfg = readConfig(ctx.env);
+  const cfg = readConfig(ctx.env, family);
   const now = Date.now();
 
   // Cookie 来源：手填 > 抓包脚本存下的整串 > 抓到的单值
@@ -345,13 +347,22 @@ const VALUE_MAP = {
   }
 };
 
+// 分尺寸画幅：「跟随全局」（默认）表示回落到底部的 RATIO 那一栏
+const RATIO_BY_FAMILY = {
+  systemSmall: 'RATIO_SMALL',
+  systemMedium: 'RATIO_MEDIUM',
+  systemLarge: 'RATIO_LARGE',
+  systemExtraLarge: 'RATIO_XLARGE'
+};
+VALUE_MAP.ratioOverride = Object.assign({ '跟随全局': '', '跟随': '', 'global': '' }, VALUE_MAP.ratio);
+
 function pickMapped(raw, map, def) {
   const v = String(raw || '').trim();
   if (!v) return def;
   return map[v] || map[v.toLowerCase()] || def;
 }
 
-function readConfig(env) {
+function readConfig(env, family) {
   const s = (k, d) => {
     const v = env && env[k];
     return v === undefined || v === null || String(v).trim() === '' ? d : String(v).trim();
@@ -383,7 +394,11 @@ function readConfig(env) {
 
   return {
     source: pickMapped(s('SOURCE', '第三方代理'), VALUE_MAP.source, 'proxy'),
-    ratio: pickMapped(s('RATIO', '自动'), VALUE_MAP.ratio, ''),
+    ratio: (() => {
+      const ownKey = RATIO_BY_FAMILY[family] || '';
+      const own = ownKey ? pickMapped(s(ownKey, '跟随全局'), VALUE_MAP.ratioOverride, '') : '';
+      return own || pickMapped(s('RATIO', '自动'), VALUE_MAP.ratio, '');
+    })(),
     period: pickMapped(s('PERIOD', '不限'), VALUE_MAP.period, ''),
     cookieMode: pickMapped(s('COOKIE_SOURCE', '手动优先'), VALUE_MAP.cookieSource, 'manual'),
     r18Mode: pickMapped(s('R18', '排除R18'), VALUE_MAP.r18, 'none'),
