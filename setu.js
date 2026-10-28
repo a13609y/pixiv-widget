@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.9';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.10';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -1125,21 +1125,33 @@ function buildWidget(entry, family, cfg, refreshAfter) {
 
   if (lines.length) {
     children.push({ type: 'spacer' });
+    // 关键：渐变挂在一个「行栈」上，行栈里塞一个弹性 spacer，
+    // 行栈就会被撑到整宽，渐变才能铺满左右边缘；
+    // 如果直接把渐变挂在文字列上，列栈只有内容宽度，左右会突然断掉。
     children.push({
       type: 'stack',
-      direction: 'column',
-      alignItems: 'start',
-      gap: 2,
-      padding: [32, 12, 10, 12],       // 上方留 32pt 专门给渐变过渡，避免出现"一刀切"的分割线
+      direction: 'row',
+      alignItems: 'end',
+      gap: 0,
+      padding: [32, 12, 10, 12],       // 上方 32pt 全部用于渐变过渡，避免一刀切
       backgroundGradient: {
         type: 'linear',
-        // 四段缓入：0 → 0.08 → 0.42 → 0.86，比原来两段直接 0→0.78 平滑得多
+        // 四段缓入：0 → 0.08 → 0.42 → 0.86，比两段 0→0.78 平滑得多
         colors: ['rgba(0,0,0,0)', 'rgba(0,0,0,0.08)', 'rgba(0,0,0,0.42)', 'rgba(0,0,0,0.86)'],
         stops: [0, 0.3, 0.62, 1],
         startPoint: { x: 0.5, y: 0 },
         endPoint: { x: 0.5, y: 1 }
       },
-      children: lines
+      children: [
+        {
+          type: 'stack',
+          direction: 'column',
+          alignItems: 'start',
+          gap: 2,
+          children: lines
+        },
+        { type: 'spacer' }
+      ]
     });
   }
 
