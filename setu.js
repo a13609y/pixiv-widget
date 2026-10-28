@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.4';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.5';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -68,7 +68,7 @@ const K = {
 const DEFAULT_HOST = 'i.pixiv.re';
 const FALLBACK_HOSTS = ['i.pixiv.re', 'i.pixiv.nl'];   // i.pixiv.cat 已全站 500，实测 i.pixiv.nl 可用
 const PAGE_SIZE = 36;   // Pixiv 网页搜索固定每页 36 条
-const MAX_POOL = 150;   // 候选池上限（只存元数据，很小）
+const MAX_POOL = 240;   // 候选池上限（只存元数据，很小）
 
 export default async function(ctx) {
   const family = ctx.widgetFamily || 'systemSmall';
@@ -135,8 +135,9 @@ export default async function(ctx) {
 
   let history = readJSON(ctx, K.history);
   if (!Array.isArray(history)) history = [];
-  history = history.filter(x => typeof x === 'string' && x);
-  const historySet = new Set(history);
+  // 统一成作品 id：旧版存的是图片 URL，这里就地迁移（URL 会因图床/代理差异对不上，去重会漏）
+  history = history.map(x => (typeof x === 'number' ? x : pidFromUrl(x))).filter(x => Number(x) > 0);
+  const historySet = new Set(history.map(String));
 
   // 候选池按「画幅 + 时段」分槽：不同尺寸各配一个画幅时互不清池，
   // 各自保留自己的翻页游标和 6 小时抑制标记；history 仍全局共享，防重复不受影响
@@ -165,7 +166,7 @@ export default async function(ctx) {
   let picked = null;
 
   const barren = pool.barrenAt && now - pool.barrenAt < 6 * 3600 * 1000;
-  const hasFresh = () => pool.items.some(it => it && it.url && !historySet.has(it.url));
+  const hasFresh = () => pool.items.some(it => it && it.url && !historySet.has(String(it.pid)));
 
   // 池里还有货，但全都在防重复窗口内
   const allSeen = pool.items.length > 0 && !hasFresh();
@@ -183,13 +184,15 @@ export default async function(ctx) {
       }
       const res = await searchAny(ctx, cfg, pool.page || 1, word);
       searches++;
-      pool.items = pool.items.concat(res.items).slice(-MAX_POOL);
+      const have = new Set(pool.items.map(it => String(it.pid)));
+      const added = res.items.filter(it => it && it.pid && !have.has(String(it.pid)));
+      pool.items = pool.items.concat(added).slice(-MAX_POOL);
       pool.page = res.page;
       pool.ts = now;
       writeJSON(ctx, poolKey, pool);
       candidate = pickFromPool(pool, historySet, family, cfg, true);
       // 这一页全是看过的：别再白翻下一页，直接交给随机兜底
-      if (!candidate && !pool.items.some(it => it && it.url && !historySet.has(it.url))) break;
+      if (!candidate && !pool.items.some(it => it && it.url && !historySet.has(String(it.pid)))) break;
     } catch (e) {
       lastError = e.message || '搜索失败';
       errorStatus = e.status || null;
@@ -211,7 +214,7 @@ export default async function(ctx) {
 
   // ④ 整个池子都在防重复窗口内 -> 按规则随机重复一张（并记下时间，6 小时内不再反复搜）
   if (!candidate) {
-    candidate = pickAnyFromPool(pool);
+    candidate = pickAnyFromPool(pool, history);
     if (candidate) {
       pool.allSeenAt = now;
       writeJSON(ctx, poolKey, pool);
@@ -273,8 +276,9 @@ export default async function(ctx) {
   };
 
   writeJSON(ctx, K.cache + family, entry);
-  if (history.indexOf(candidate.url) >= 0) history.splice(history.indexOf(candidate.url), 1);
-  history.push(candidate.url);
+  const hp = history.indexOf(candidate.pid);
+  if (hp >= 0) history.splice(hp, 1);   // 轮转：重新展示的图挪到队尾
+  history.push(candidate.pid);
   while (history.length > cfg.maxHistory) history.shift();
   writeJSON(ctx, K.history, history);
   ctx.storage.set(K.lastShow + family, String(now));
@@ -435,7 +439,12 @@ function readConfig(env, family) {
     cookie: '',            // 运行时解析：env > 抓包脚本存储
     trendingEnabled: false,
     cooldownMin: int('COOLDOWN', 30, 0, 24 * 60),
-    maxHistory: int('NO_REPEAT', int('MAX_HISTORY', 30, 1, 500), 1, 500),
+    // 「永不再重」= 记住 2000 张；其余按数值。默认 100（原来 30，四个尺寸一分就没剩多少）
+    maxHistory: (() => {
+      const raw = s('NO_REPEAT', '');
+      if (/永不再重|永久|forever/i.test(raw)) return 2000;
+      return int('NO_REPEAT', int('MAX_HISTORY', 100, 1, 2000), 1, 2000);
+    })(),
     quality: pickMapped(s('IMAGE_QUALITY', '自动'), VALUE_MAP.quality, 'auto'),
     imgHost: host,
     aspectFit: pickMapped(s('ASPECT_FIT', '自动匹配'), VALUE_MAP.aspect, 'auto') !== 'off',
@@ -786,18 +795,26 @@ function pickByAspect(items, family, aspectFit, strict, ratio) {
 }
 
 // 池内全部都在防重复窗口内时用：忽略历史，随机取一张并标记「重复」
-function pickAnyFromPool(pool) {
+// 池里的图全在防重复窗口内时：挑「最久没出现过」的那张，形成轮转而不是随机重复
+function pickAnyFromPool(pool, history) {
   if (!pool || !Array.isArray(pool.items) || pool.items.length === 0) return null;
-  const idx = Math.floor(Math.random() * pool.items.length);
-  const picked = pool.items[idx];
-  if (!picked) return null;
-  picked.__repeat = true;   // 只标记，不把条目从池子里摘掉，否则池子会被慢慢掏空
-  return picked;
+  const rank = new Map();
+  (history || []).forEach((pid, i) => rank.set(String(pid), i));
+  let best = null;
+  let bestRank = Infinity;
+  for (const it of pool.items) {
+    if (!it || !it.url) continue;
+    const r = rank.has(String(it.pid)) ? rank.get(String(it.pid)) : -1;
+    if (r < bestRank) { bestRank = r; best = it; }
+  }
+  if (!best) best = pool.items[0];
+  best.__repeat = true;
+  return best;
 }
 
 function pickFromPool(pool, historySet, family, cfg, strict) {
   if (!pool || !Array.isArray(pool.items) || pool.items.length === 0) return null;
-  let fresh = pool.items.filter(it => it && it.url && !historySet.has(it.url));
+  let fresh = pool.items.filter(it => it && it.url && !historySet.has(String(it.pid)));
   if (fresh.length === 0) return null;
 
   // 选了画幅：先在「实际画幅符合」的条目里挑；严格模式下没有就返回 null 让外层再翻页
@@ -886,6 +903,12 @@ function isExcluded(item, excludes) {
 /* ========================= 图片地址推导 ======================= */
 
 // 从缩略图 URL 取出 /img-master/... 主干，再拼 1200 / 540 两档
+// 从图片 URL 里抠作品 id（旧版 history 存的是 URL，迁移要用）
+function pidFromUrl(u) {
+  const m = /(\d+)_p\d+/.exec(String(u || ''));
+  return m ? Number(m[1]) : 0;
+}
+
 function imageStem(rawUrl) {
   const m = /^https?:\/\/[^/]+(\/.*)$/.exec(String(rawUrl || ''));
   if (!m) return null;
