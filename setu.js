@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.5';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.6';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -441,9 +441,12 @@ function readConfig(env, family) {
     cooldownMin: int('COOLDOWN', 30, 0, 24 * 60),
     // 「永不再重」= 记住 2000 张；其余按数值。默认 100（原来 30，四个尺寸一分就没剩多少）
     maxHistory: (() => {
+      let cap;
       const raw = s('NO_REPEAT', '');
-      if (/永不再重|永久|forever/i.test(raw)) return 2000;
-      return int('NO_REPEAT', int('MAX_HISTORY', 100, 1, 2000), 1, 2000);
+      if (/永不再重|永久|forever/i.test(raw)) cap = 2000;
+      else cap = int('NO_REPEAT', int('MAX_HISTORY', 100, 1, 2000), 1, 2000);
+      // 窗口至少要能装下整个候选池，否则「池子还没走完就有图掉出窗口」→ 提前复现
+      return Math.max(cap, MAX_POOL);
     })(),
     quality: pickMapped(s('IMAGE_QUALITY', '自动'), VALUE_MAP.quality, 'auto'),
     imgHost: host,
@@ -1020,9 +1023,9 @@ function buildWidget(entry, family, cfg, refreshAfter) {
   const isSmall = family === 'systemSmall';
   const showInfo = cfg.showInfo && entry && (entry.title || entry.author);
   const children = [];
+  const lines = [];
 
   if (showInfo) {
-    const lines = [];
     if (entry.title) {
       lines.push({
         type: 'text',
@@ -1043,16 +1046,22 @@ function buildWidget(entry, family, cfg, refreshAfter) {
         minScale: 0.75
       });
     }
-    if (cfg.debug && entry.aspect) {
-      lines.push({
-        type: 'text',
-        text: `${SCRIPT_VER} ${cfg.cookie ? '🔑' : '🔒'} ${cfg.ratio || '自动'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band}${entry.repeat ? ' · ♻重复' : ''}${entry.proxyWarn ? ' · ⚠代理回退' : ''}${entry.sortWarn ? ' · ↗网页排序' : ''}${entry.sortDegraded ? ' · ⚠无人气排序' : ''} · ${entry.wordSource || '-'} · 拦截${entry.seenText || '无'}`,
-        font: { size: 'caption2' },
-        textColor: 'rgba(255,255,255,0.55)',
-        maxLines: 1
-      });
-    }
+  }
 
+  // 调试角标独立于「显示标题作者」：以前它嵌在 SHOW_INFO 里，
+  // 一关掉标题角标就跟着消失，看起来像开关失效
+  if (cfg.debug) {
+    const asp = entry.aspect || {};
+    lines.push({
+      type: 'text',
+      text: `${SCRIPT_VER} ${cfg.cookie ? '🔑' : '🔒'} ${cfg.ratio || '自动'} ${asp.ar || '-'}/${asp.target || '-'} · ${asp.band || '无'}${entry.repeat ? ' · ♻重复' : ''}${entry.proxyWarn ? ' · ⚠代理回退' : ''}${entry.sortWarn ? ' · ↗网页排序' : ''}${entry.sortDegraded ? ' · ⚠无人气排序' : ''} · ${entry.wordSource || '-'} · 拦截${entry.seenText || '无'}`,
+      font: { size: 'caption2' },
+      textColor: 'rgba(255,255,255,0.55)',
+      maxLines: 1
+    });
+  }
+
+  if (lines.length) {
     children.push({ type: 'spacer' });
     children.push({
       type: 'stack',
