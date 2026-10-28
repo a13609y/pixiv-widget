@@ -261,7 +261,8 @@ export default async function(ctx) {
     dataUri: img.dataUri,
     uiSig: uiSignature(cfg),
     sig,
-    sortWarn: cfg.source === 'proxy' && cfg.order === 'popular_d',   // 实测代理忽略 sort，只有最新
+    sortWarn: cfg.source === 'proxy' && cfg.order === 'popular_d' && cfg.cookie,   // 已改走网页排序
+    sortDegraded: cfg.order === 'popular_d' && !cfg.cookie,                        // 未登录，两个源都排不出热度
     proxyWarn: (() => {
       try {
         const r = JSON.parse(ctx.storage.get('pixiv_proxy_err') || 'null');
@@ -502,7 +503,8 @@ function periodStart(period) {
 async function searchAny(ctx, cfg, page, word) {
   // 代理固定 content_type=illust（要漫画只能走网页）；且实测它忽略 sort，
   // 选了「人气最高」时先打代理只会拿到最新，直接改走网页搜索
-  const proxyUsable = cfg.source === 'proxy' && cfg.type !== 'manga' && cfg.order !== 'popular_d';
+  const proxyUsable = cfg.source === 'proxy' && cfg.type !== 'manga'
+    && !(cfg.order === 'popular_d' && cfg.cookie);   // 未登录时网页也排不出热度，留在代理保住服务端画幅筛选
   if (proxyUsable) {
     try {
       return await searchProxy(ctx, cfg, page, word);
@@ -1021,7 +1023,7 @@ function buildWidget(entry, family, cfg, refreshAfter) {
     if (cfg.debug && entry.aspect) {
       lines.push({
         type: 'text',
-        text: `${SCRIPT_VER} ${cfg.cookie ? '🔑' : '🔒'} ${cfg.ratio || '自动'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band}${entry.repeat ? ' · ♻重复' : ''}${entry.proxyWarn ? ' · ⚠代理回退' : ''}${entry.sortWarn ? ' · ↗网页排序' : ''} · ${entry.wordSource || '-'} · 拦截${entry.seenText || '无'}`,
+        text: `${SCRIPT_VER} ${cfg.cookie ? '🔑' : '🔒'} ${cfg.ratio || '自动'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band}${entry.repeat ? ' · ♻重复' : ''}${entry.proxyWarn ? ' · ⚠代理回退' : ''}${entry.sortWarn ? ' · ↗网页排序' : ''}${entry.sortDegraded ? ' · ⚠无人气排序' : ''} · ${entry.wordSource || '-'} · 拦截${entry.seenText || '无'}`,
         font: { size: 'caption2' },
         textColor: 'rgba(255,255,255,0.55)',
         maxLines: 1
