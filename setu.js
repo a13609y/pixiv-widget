@@ -55,6 +55,8 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
+const SCRIPT_VER = 'v4.3';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+
 const K = {
   cache: 'sx5_cache_',       // + family
   pool: 'sx5_pool',
@@ -113,8 +115,11 @@ export default async function(ctx) {
   const cached = readJSON(ctx, K.cache + family);
   const lastShow = Number(ctx.storage.get(K.lastShow + family) || 0) || 0;
   const remaining = cooldownMs - (now - lastShow);
+  // 缓存要跟着搜索/画幅参数走：改了「画幅·中号」这类设置必须立刻生效，不能等冷却结束
+  const sig = signature(cfg);
+  const stale = !cached || cached.sig !== sig;
 
-  if (cached && cached.dataUri && remaining > 0) {
+  if (cached && cached.dataUri && remaining > 0 && !stale) {
     // 只改了「显示标题作者 / 调试角标 / 文字颜色」这类纯排版项时，
     // 不必等换图：把缓存打上新签名并请求 1 分钟后重绘，WidgetKit 很快就会用新样式渲染
     const uiSig = uiSignature(cfg);
@@ -136,7 +141,6 @@ export default async function(ctx) {
   const poolKey = K.pool + '|' + (cfg.ratio || 'auto') + '|' + (cfg.period || 'all');
   let pool = readJSON(ctx, poolKey) || {};
   if (!Array.isArray(pool.items)) pool.items = [];
-  const sig = signature(cfg);
   // 搜索参数变了、或池子闲置超过 12 小时，都作废重来
   if (pool.sig !== sig || !pool.ts || now - pool.ts > 12 * 3600 * 1000) {
     pool = { items: [], ts: now, page: 1, sig };
@@ -250,6 +254,13 @@ export default async function(ctx) {
     url: img.url,
     dataUri: img.dataUri,
     uiSig: uiSignature(cfg),
+    sig,
+    proxyWarn: (() => {
+      try {
+        const r = JSON.parse(ctx.storage.get('pixiv_proxy_err') || 'null');
+        return !!(r && r.at && now - r.at < 10 * 60 * 1000);
+      } catch (e) { return false; }
+    })(),
     at: now
   };
 
@@ -487,7 +498,7 @@ async function searchAny(ctx, cfg, page, word) {
       return await searchProxy(ctx, cfg, page, word);
     } catch (e) {
       // 第三方接口挂了就退回官方网页搜索，不让小组件空着
-      ctx.storage.set('pixiv_proxy_err', String((e && e.message) || e).slice(0, 120));
+      ctx.storage.set('pixiv_proxy_err', JSON.stringify({ at: Date.now(), msg: String((e && e.message) || e).slice(0, 120) }));
     }
   }
   return await searchPixiv(ctx, cfg, page, word);
@@ -679,13 +690,40 @@ function aspectTiers(family) {
   }
 }
 
-function pickByAspect(items, family, aspectFit, strict) {
+// 显式指定画幅时的目标比例 / 判定：只要用户选了画幅，本地必须兜住，
+// 不能因为「代理挂了退回网页搜索」就把方图塞给中号
+const RATIO_TARGET = { landscape: 1.78, square: 1.0, portrait: 0.65 };
+
+function arOf(it) {
+  return (it && it.width && it.height) ? it.width / it.height : 0;
+}
+
+function matchesRatio(it, ratio) {
+  const ar = arOf(it);
+  if (!ar) return false;
+  if (ratio === 'landscape') return ar >= 1.4;
+  if (ratio === 'portrait') return ar < 0.85;
+  return ar >= 0.85 && ar < 1.4;   // square
+}
+
+function pickByAspect(items, family, aspectFit, strict, ratio) {
   if (!items || items.length === 0) return null;
   const target = targetAspect(family);
 
   if (!aspectFit) {
+    // 指定了画幅就按「离该画幅最近」挑（服务端已筛过时等价于随机，兜底时能挡住方图）
+    if (ratio && RATIO_TARGET[ratio]) {
+      const t2 = RATIO_TARGET[ratio];
+      const ranked = items
+        .map(it => ({ it, score: arOf(it) > 0 ? Math.abs(Math.log(arOf(it) / t2)) : 9 }))
+        .sort((a, b) => a.score - b.score)
+        .slice(0, 3);
+      const best = ranked[Math.floor(Math.random() * ranked.length)].it;
+      best.__aspect = { target, ar: +arOf(best).toFixed(2) || null, band: 'ratio' };
+      return best;
+    }
     const pick = items[Math.floor(Math.random() * items.length)];
-    const ar = (pick.width && pick.height) ? pick.width / pick.height : 0;
+    const ar = arOf(pick);
     pick.__aspect = { target, ar: ar ? +ar.toFixed(2) : null, band: 'skip' };
     return pick;
   }
@@ -733,10 +771,17 @@ function pickAnyFromPool(pool) {
 
 function pickFromPool(pool, historySet, family, cfg, strict) {
   if (!pool || !Array.isArray(pool.items) || pool.items.length === 0) return null;
-  const fresh = pool.items.filter(it => it && it.url && !historySet.has(it.url));
+  let fresh = pool.items.filter(it => it && it.url && !historySet.has(it.url));
   if (fresh.length === 0) return null;
 
-  const picked = pickByAspect(fresh, family, cfg.aspectFit, strict);
+  // 选了画幅：先在「实际画幅符合」的条目里挑；严格模式下没有就返回 null 让外层再翻页
+  if (cfg.ratio) {
+    const ok = fresh.filter(it => matchesRatio(it, cfg.ratio));
+    if (ok.length) fresh = ok;
+    else if (strict) return null;
+  }
+
+  const picked = pickByAspect(fresh, family, cfg.aspectFit, strict, cfg.ratio);
   if (!picked) return null;
   pool.items = pool.items.filter(it => it !== picked);
   return picked;
@@ -940,7 +985,7 @@ function buildWidget(entry, family, cfg, refreshAfter) {
     if (cfg.debug && entry.aspect) {
       lines.push({
         type: 'text',
-        text: `${cfg.cookie ? '🔑' : '🔒'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band}${entry.repeat ? ' · ♻重复' : ''} · ${entry.wordSource || '-'} · 拦截${entry.seenText || seenText}`,
+        text: `${SCRIPT_VER} ${cfg.cookie ? '🔑' : '🔒'} ${cfg.ratio || '自动'} ${entry.aspect.ar || '-'}/${entry.aspect.target} · ${entry.aspect.band}${entry.repeat ? ' · ♻重复' : ''}${entry.proxyWarn ? ' · ⚠代理回退' : ''} · ${entry.wordSource || '-'} · 拦截${entry.seenText || seenText}`,
         font: { size: 'caption2' },
         textColor: 'rgba(255,255,255,0.55)',
         maxLines: 1
