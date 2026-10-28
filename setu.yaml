@@ -30,7 +30,7 @@ env_schema:
     options: ["不限", "一天内", "一周内", "一个月内", "半年内", "一年内"]
   RATIO:
     name: 画幅 【仅代理】
-    description: "服务器直接返回指定画幅，横图命中率 100%；官方网页模式下忽略此项（改由本地挑）"
+    description: "服务器直接返回指定画幅，横图命中率 100%；官方网页模式下忽略此项（改由本地挑）。可给每个尺寸单独建一条 widget 配置，各填不同画幅（候选池按画幅分槽，互不干扰）"
     options: ["自动", "横图", "方图", "竖图"]
   TYPE:
     name: 作品类型 【仅网页】
@@ -134,6 +134,18 @@ widgets:
   - name: 每日美图
     script_name: PixivWidget
     env:
+      TYPE: "illust"
+      MAX_PAGE: "3"
+      TRENDING: "auto"
+      COOLDOWN: "30"
+
+  # 想给某个尺寸单独指定画幅就再建一条同 script_name 的配置，
+  # 然后在 iOS 里对该尺寸的小组件「编辑小组件」时选它。
+  # 候选池按 画幅|时段 分槽，两条配置各自翻页、互不清池；防重复历史仍全局共享。
+  - name: 每日美图-横
+    script_name: PixivWidget
+    env:
+      RATIO: "横图"
       TYPE: "illust"
       MAX_PAGE: "3"
       TRENDING: "auto"

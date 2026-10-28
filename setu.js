@@ -22,6 +22,9 @@
  * ── 环境变量（全部可选）────────────────────────────────────────
  * SOURCE         搜索源：第三方代理（默认，支持服务端横竖方筛选）/ 官方网页
  * RATIO          画幅筛选（仅第三方代理有效）：自动 / 横图 / 方图 / 竖图
+ *                每条 widget 配置可各填一个画幅（比如中号横图、小号方图）；
+ *                候选池按「画幅|时段」分槽，不同画幅互不清池、各自保留翻页游标，
+ *                history 仍全局共享，跨尺寸依然不会重复出图
  * API_BASE       第三方接口地址，默认 https://api.cocomi.eu.org
  * KEYWORD        搜索词，标签模糊匹配
  * TAGS           精确标签，多个用 | 或 , 分隔，第一个作为搜索词
@@ -126,7 +129,10 @@ export default async function(ctx) {
   history = history.filter(x => typeof x === 'string' && x);
   const historySet = new Set(history);
 
-  let pool = readJSON(ctx, K.pool) || {};
+  // 候选池按「画幅 + 时段」分槽：不同尺寸各配一个画幅时互不清池，
+  // 各自保留自己的翻页游标和 6 小时抑制标记；history 仍全局共享，防重复不受影响
+  const poolKey = K.pool + '|' + (cfg.ratio || 'auto') + '|' + (cfg.period || 'all');
+  let pool = readJSON(ctx, poolKey) || {};
   if (!Array.isArray(pool.items)) pool.items = [];
   const sig = signature(cfg);
   // 搜索参数变了、或池子闲置超过 12 小时，都作废重来
@@ -142,7 +148,7 @@ export default async function(ctx) {
   let candidate = pickFromPool(pool, historySet, family, cfg, true);
   if (candidate) {
     pool.ts = now;                 // 只要还在用就续命，避免剩一半被 TTL 丢掉
-    writeJSON(ctx, K.pool, pool);
+    writeJSON(ctx, poolKey, pool);
   }
 
   // ② 池里没有合适画幅 -> 继续往后翻页补货（同一次刷新最多 2 页）
@@ -168,7 +174,7 @@ export default async function(ctx) {
       pool.items = pool.items.concat(res.items).slice(-MAX_POOL);
       pool.page = res.page;
       pool.ts = now;
-      writeJSON(ctx, K.pool, pool);
+      writeJSON(ctx, poolKey, pool);
       candidate = pickFromPool(pool, historySet, family, cfg, true);
       // 这一页全是看过的：别再白翻下一页，直接交给随机兜底
       if (!candidate && !pool.items.some(it => it && it.url && !historySet.has(it.url))) break;
@@ -182,13 +188,13 @@ export default async function(ctx) {
   // ②b 翻了两页还是没有 -> 记一笔，6 小时内不再为画幅额外翻页
   if (!candidate && searches > 0) {
     pool.barrenAt = now;
-    writeJSON(ctx, K.pool, pool);
+    writeJSON(ctx, poolKey, pool);
   }
 
   // ③ 退而求其次：池里画幅最接近的「没看过」的图
   if (!candidate) {
     candidate = pickFromPool(pool, historySet, family, cfg, false);
-    if (candidate) writeJSON(ctx, K.pool, pool);
+    if (candidate) writeJSON(ctx, poolKey, pool);
   }
 
   // ④ 整个池子都在防重复窗口内 -> 按规则随机重复一张（并记下时间，6 小时内不再反复搜）
@@ -196,7 +202,7 @@ export default async function(ctx) {
     candidate = pickAnyFromPool(pool);
     if (candidate) {
       pool.allSeenAt = now;
-      writeJSON(ctx, K.pool, pool);
+      writeJSON(ctx, poolKey, pool);
     }
   }
 
