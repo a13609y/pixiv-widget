@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.13';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.14';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -159,6 +159,7 @@ export default async function(ctx) {
       ts: now,
       createdAt: now,
       page: sigChanged ? 1 : (prev.page || 1),
+      fetchedTo: sigChanged ? 0 : (prev.fetchedTo || 0),   // 最深翻到过第几页，别因为重建又从头走
       sig
     };
     if (!sigChanged && prev.word) pool.word = prev.word;
@@ -197,8 +198,10 @@ export default async function(ctx) {
         if (pool.word) { word = pool.word; picked = { source: 'pool' }; }
         else { picked = await pickWord(ctx, cfg); word = picked.word; pool.word = word; }
       }
-      const res = await searchAny(ctx, cfg, pool.page || 1, word);
+      const asked = pool.page || 1;
+      const res = await searchAny(ctx, cfg, asked, word);
       searches++;
+      pool.fetchedTo = Math.max(pool.fetchedTo || 0, asked);
       const have = new Set(pool.items.map(it => String(it.pid)));
       const added = res.items.filter(it => it && it.pid && !have.has(String(it.pid)));
       pool.items = pool.items.concat(added).slice(-cfg.poolSize);
@@ -236,8 +239,11 @@ export default async function(ctx) {
           if (pool.word) { word = pool.word; picked = { source: 'pool' }; }
           else { picked = await pickWord(ctx, cfg); word = picked.word; pool.word = word; }
         }
-        const res = await searchAny(ctx, cfg, pool.page || 1, word, true);   // deep：不回卷
+        // 从最深处继续往后，而不是从回卷后的第 1 页重走（那几页全看过，白费请求还导致重复）
+        const from = Math.min(DEEP_MAX_PAGE, Math.max(pool.page || 1, (pool.fetchedTo || 0) + 1));
+        const res = await searchAny(ctx, cfg, from, word, true);   // deep：不回卷
         searches++;
+        pool.fetchedTo = Math.max(pool.fetchedTo || 0, from);
         const have = new Set(pool.items.map(it => String(it.pid)));
         const added = res.items.filter(it => it && it.pid && !have.has(String(it.pid)));
         pool.items = pool.items.concat(added).slice(-cfg.poolSize);
