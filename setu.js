@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.16';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v5.0';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -98,6 +98,9 @@ export default async function(ctx) {
 
   cfg.trendingEnabled = cfg.trendingMode === 'on'
     || (cfg.trendingMode === 'auto' && !!cfg.cookie);
+  // 没填任何搜索词、也没有登录态热搜可用时：优先用免登录热门榜，拿不到再退回随机标签
+  const hasExplicitWord = !!(cfg.pixivWord || cfg.tags.length || cfg.keyword);
+  cfg.preferRanking = cfg.source === 'ranking' || (cfg.source === 'proxy' && !hasExplicitWord && !cfg.trendingEnabled);
   const cooldownMs = cfg.cooldownMin > 0 ? cfg.cooldownMin * 60000 : 0;
   // 整次渲染的时间预算：Egern 给的 60s 里留 15s 余量，超了就不再发新请求
   cfg.deadline = now + 45 * 1000;
@@ -197,12 +200,13 @@ export default async function(ctx) {
     try {
       if (!word) {
         // 池子已经有词就沿用，别每次刷新换一个热门标签把池子搅浑
-        if (pool.word) { word = pool.word; picked = { source: 'pool' }; }
-        else { picked = await pickWord(ctx, cfg); word = picked.word; pool.word = word; }
+        if (pool.word) { word = pool.word === '#rank' ? '' : pool.word; picked = { source: 'pool' }; }
+        else { picked = await pickWord(ctx, cfg); word = picked.word; pool.word = word || '#rank'; }
       }
       const asked = pool.page || 1;
       const res = await searchAny(ctx, cfg, asked, word);
       searches++;
+      if (res.word && res.word !== word) { word = res.word; pool.word = word; }   // 榜单失败→随机词，记住它
       pool.fetchedTo = Math.max(pool.fetchedTo || 0, asked);
       const have = new Set(pool.items.map(it => String(it.pid)));
       const added = res.items.filter(it => it && it.pid && !have.has(String(it.pid)));
@@ -238,8 +242,8 @@ export default async function(ctx) {
       if (cfg.deadline && Date.now() > cfg.deadline - 6000) break;   // 别把整轮拖过小组件超时
       try {
         if (!word) {
-          if (pool.word) { word = pool.word; picked = { source: 'pool' }; }
-          else { picked = await pickWord(ctx, cfg); word = picked.word; pool.word = word; }
+          if (pool.word) { word = pool.word === '#rank' ? '' : pool.word; picked = { source: 'pool' }; }
+          else { picked = await pickWord(ctx, cfg); word = picked.word; pool.word = word || '#rank'; }
         }
         // 从最深处继续往后，而不是从回卷后的第 1 页重走（那几页全看过，白费请求还导致重复）
         const from = Math.min(DEEP_MAX_PAGE, Math.max(pool.page || 1, (pool.fetchedTo || 0) + 1));
@@ -436,7 +440,15 @@ const VALUE_MAP = {
   },
   source: {
     '第三方代理': 'proxy', 'proxy': 'proxy',
-    '官方网页': 'web', 'web': 'web'
+    '官方网页': 'web', 'web': 'web',
+    '热门榜': 'ranking', 'ranking': 'ranking', '排行榜': 'ranking',
+    '热门榜（免登录）': 'ranking', '热门榜(免登录)': 'ranking'
+  },
+  rankMode: {
+    '日榜': 'daily', 'daily': 'daily',
+    '周榜': 'weekly', 'weekly': 'weekly',
+    '新人榜': 'rookie', 'rookie': 'rookie',
+    '月榜': 'monthly', 'monthly': 'monthly'
   },
   r18: {
     '排除R18': 'none', '排除': 'none', 'false': 'none', 'off': 'none', '关闭': 'none',
@@ -522,6 +534,7 @@ function readConfig(env, family) {
     cookieMode: pickMapped(s('COOKIE_SOURCE', '手动优先'), VALUE_MAP.cookieSource, 'manual'),
     r18Mode: pickMapped(s('R18', '排除R18'), VALUE_MAP.r18, 'none'),
     apiBase: s('API_BASE', 'https://api.cocomi.eu.org').replace(/\/+$/, ''),
+    rankMode: pickMapped(s('RANK_MODE', '日榜'), VALUE_MAP.rankMode, 'daily'),
     keyword: s('KEYWORD', ''),
     pixivWord: s('PIXIV_WORD', ''),
     tags: list('TAGS', 10),
@@ -572,7 +585,7 @@ function uiSignature(cfg) {
 }
 
 function signature(cfg) {
-  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.originalMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.period, cfg.apiBase, cfg.r18Mode].join('|');
+  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.originalMode, cfg.excludeTags.join(','), cfg.source, cfg.rankMode, cfg.ratio, cfg.period, cfg.apiBase, cfg.r18Mode].join('|');
 }
 
 function nextIso(minutes) {
@@ -622,19 +635,77 @@ function periodStart(period) {
 }
 
 async function searchAny(ctx, cfg, page, word, deep) {
+  // 热门榜：显式选了榜单就直接用（忽略搜索词）；「代理 + 没填词」也自动走榜单
+  if (cfg.source === 'ranking' || (!word && cfg.preferRanking)) {
+    try {
+      return await searchRanking(ctx, cfg, page);
+    } catch (e) {
+      ctx.storage.set('pixiv_proxy_err', JSON.stringify({ at: Date.now(), msg: '榜单不可用：' + String((e && e.message) || e).slice(0, 90) }));
+      word = defaultWord(cfg);   // 榜单挂了 / 被筛空 → 换随机标签，走同一个代理的搜索接口
+      try {
+        const out = await searchProxy(ctx, cfg, page, word, deep);
+        out.word = word;
+        return out;
+      } catch (e2) { /* 代理也不行，继续往下走网页搜索 */ }
+    }
+  }
+
   // 代理固定 content_type=illust（要漫画只能走网页）；且实测它忽略 sort，
   // 选了「人气最高」时先打代理只会拿到最新，直接改走网页搜索
   const proxyUsable = cfg.source === 'proxy' && cfg.type !== 'manga'
     && !(cfg.order === 'popular_d' && cfg.cookie);   // 未登录时网页也排不出热度，留在代理保住服务端画幅筛选
   if (proxyUsable) {
     try {
-      return await searchProxy(ctx, cfg, page, word, deep);
+      const out = await searchProxy(ctx, cfg, page, word, deep);
+      out.word = word;
+      return out;
     } catch (e) {
       // 第三方接口挂了就退回官方网页搜索，不让小组件空着
       ctx.storage.set('pixiv_proxy_err', JSON.stringify({ at: Date.now(), msg: String((e && e.message) || e).slice(0, 120) }));
     }
   }
-  return await searchPixiv(ctx, cfg, page, word, deep);
+  const out2 = await searchPixiv(ctx, cfg, page, word, deep);
+  out2.word = word;
+  return out2;
+}
+
+// 免登录热门榜：pxve-api 的 /api/pixiv-now/ranking，走 pixiv 网页版榜单，不需要 Cookie
+// 每页 50 条，日榜/周榜 500 条、新人榜 300 条、月榜 250 条左右
+async function searchRanking(ctx, cfg, page) {
+  const p = Math.max(1, page | 0);
+  const url = `${cfg.apiBase}/api/pixiv-now/ranking?mode=${cfg.rankMode}&content=illust&p=${p}`;
+  const resp = await request(ctx, url, {
+    'Accept': 'application/json',
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1'
+  }, cfg);
+
+  const body = await resp.json().catch(() => null);
+  if (!body || !Array.isArray(body.contents)) throw new Error('榜单接口返回异常');
+
+  const items = body.contents.map(it => {
+    const ct = it.illust_content_type || {};
+    return {
+      pid: Number(it.illust_id),
+      page: `https://www.pixiv.net/artworks/${it.illust_id}`,
+      title: it.title,
+      author: it.user_name,
+      tags: Array.isArray(it.tags) ? it.tags : [],
+      width: Number(it.width) || 0,
+      height: Number(it.height) || 0,
+      pageCount: Number(it.illust_page_count) || 1,
+      ai: undefined,                       // 榜单不带 AI 标记，别拿它当 false
+      r18: String(it.x_restrict) === '1' || String(it.x_restrict) === '2',
+      isOriginal: typeof ct.original === 'boolean' ? ct.original : undefined,
+      // 榜单里的 url 是 `/-/c/480x960/img-master/...`，补上图床域名并去掉 `/-`
+      url: it.url ? 'https://i.pximg.net' + String(it.url).replace(/^\/-/, '') : ''
+    };
+  }).filter(it => it.pid && it.url && /\.(png|jpe?g|gif|webp)$/i.test(it.url.split('?')[0]));
+
+  const passed = applyFilters(items, cfg);
+  if (passed.length === 0) throw new Error('榜单这一页没有符合条件的作品');
+
+  const hasNext = !!body.next;
+  return { items: passed, page: hasNext ? p + 1 : 1 };
 }
 
 // 第三方 Pixiv 代理（hibiapi 系）：服务端支持 ratio_pattern 横竖方筛选
@@ -966,12 +1037,19 @@ async function pickWord(ctx, cfg) {
   }
   // 默认词：如果正在排除原创（只要同人 / 排除标签里有 オリジナル），
   // 就绝不能拿「オリジナル」当搜索词 —— 那等于自己把自己的结果全筛空，一张图都出不来
+  // 没填词也没热搜：先用免登录热门榜（真·热门），拿不到才退回随机标签
+  if (cfg.preferRanking) return { word: '', source: 'ranking' };
+  return { word: defaultWord(cfg), source: 'default' };
+}
+
+// 随机默认标签：要原创就搜原创标签；排原创就避开它
+function defaultWord(cfg) {
   const avoidsOriginal = cfg.excludeTags.some(t => /オリジナル|原创/i.test(t));
   let words;
-  if (cfg.originalMode === 'only') words = ['オリジナル'];                 // 要原创就搜原创标签
+  if (cfg.originalMode === 'only') words = ['オリジナル'];
   else if (cfg.originalMode === 'fan' || avoidsOriginal) words = ['イラスト', '女の子', '風景'];
   else words = ['イラスト', '女の子', '風景', 'オリジナル'];
-  return { word: words[Math.floor(Math.random() * words.length)], source: 'default' };
+  return words[Math.floor(Math.random() * words.length)];
 }
 
 // 热门搜索词：登录态才有数据，缓存 6 小时
@@ -1024,8 +1102,10 @@ function applyFilters(items, cfg) {
     } else if (cfg.originalMode === 'fan') {
       if (isOriginalWork(it)) return false;
     }
-    if (cfg.aiMode === 'only' && !it.ai) return false;
-    if (cfg.aiMode === 'exclude' && it.ai) return false;
+    if (typeof it.ai === 'boolean') {              // 榜单没有这个字段，缺了就跳过判断
+      if (cfg.aiMode === 'only' && !it.ai) return false;
+      if (cfg.aiMode === 'exclude' && it.ai) return false;
+    }
     if (isExcluded(it, cfg.excludeTags)) return false;
     return true;
   });
