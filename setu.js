@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.15';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.16';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -964,7 +964,14 @@ async function pickWord(ctx, cfg) {
       return { word: tags[Math.floor(Math.random() * tags.length)], source: 'trending' };
     }
   }
-  return { word: 'オリジナル', source: 'default' };
+  // 默认词：如果正在排除原创（只要同人 / 排除标签里有 オリジナル），
+  // 就绝不能拿「オリジナル」当搜索词 —— 那等于自己把自己的结果全筛空，一张图都出不来
+  const avoidsOriginal = cfg.excludeTags.some(t => /オリジナル|原创/i.test(t));
+  let words;
+  if (cfg.originalMode === 'only') words = ['オリジナル'];                 // 要原创就搜原创标签
+  else if (cfg.originalMode === 'fan' || avoidsOriginal) words = ['イラスト', '女の子', '風景'];
+  else words = ['イラスト', '女の子', '風景', 'オリジナル'];
+  return { word: words[Math.floor(Math.random() * words.length)], source: 'default' };
 }
 
 // 热门搜索词：登录态才有数据，缓存 6 小时
