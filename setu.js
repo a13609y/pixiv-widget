@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.14';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.15';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -158,8 +158,10 @@ export default async function(ctx) {
       items: [],
       ts: now,
       createdAt: now,
-      page: sigChanged ? 1 : (prev.page || 1),
-      fetchedTo: sigChanged ? 0 : (prev.fetchedTo || 0),   // 最深翻到过第几页，别因为重建又从头走
+      // 到期（POOL_TTL）= 回到最新区重扫，捞这 N 小时新发布的作品；
+      // 但深翻进度（fetchedTo）保留 —— 最新区没有新图时，接着上次的深页往下走，不从头再爬一遍
+      page: 1,
+      fetchedTo: sigChanged ? 0 : (prev.fetchedTo || 0),
       sig
     };
     if (!sigChanged && prev.word) pool.word = prev.word;
