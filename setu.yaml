@@ -56,6 +56,10 @@ env_schema:
     name: R18 过滤 【通用】
     description: "排除R18=只要全年龄（默认）；只要R18=只取 R18，建议配第三方代理；全部=不过滤。第三方接口无视 r18 参数，一律本地按 x_restrict 筛"
     options: ["排除R18", "只要R18", "全部"]
+  ORIGINAL:
+    name: 原创 / 同人 【通用】
+    description: "用 pixiv 的 isOriginal 字段判断，不看标签。「只要同人」在代理模式会为每张新图补一次详情查询确认（+1 请求/张，被风控时退回标签近似）；「只要原创」在代理模式仍受「オリジナル」标签限制，没打标签的原创找不到"
+    options: ["不筛选", "只要原创", "只要同人"]
   AI_MODE:
     name: AI 作品 【通用】
     description: "按 illust_ai_type 本地过滤，两个源都生效（比接口自带开关可靠）"

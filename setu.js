@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.10';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.11';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -270,6 +270,32 @@ export default async function(ctx) {
     return buildError(lastError || '暂无可用图片', cfg, nextIso(Math.min(backoff, 15)));
   }
 
+  // ── 原创/同人校准 ─────────────────────────────────────────────
+  // 第三方代理不给 isOriginal，只能按标签猜（没打标签的原创会漏）。
+  // 选了筛选就补一次作品详情查询确认；查不到（风控/超时）就沿用标签判断，不阻塞
+  if (candidate && cfg.originalMode !== 'any' && typeof candidate.isOriginal !== 'boolean') {
+    for (let i = 0; i < 3 && candidate; i++) {
+      const pid = candidate.pid;
+      try {
+        const r = await request(ctx, `https://www.pixiv.net/ajax/illust/${pid}`, {
+          'Accept': 'application/json',
+          'Referer': 'https://www.pixiv.net/',
+          'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+        }, cfg);
+        const b = await r.json().catch(() => null);
+        const flag = b && b.error === false && b.body ? b.body.isOriginal : null;
+        if (typeof flag !== 'boolean') break;          // 没这个字段就不猜了，按标签走
+        candidate.isOriginal = flag;
+        const pass = cfg.originalMode === 'only' ? flag : !flag;
+        if (pass) break;
+      } catch (e) {
+        break;                                          // 风控/超时：沿用标签近似
+      }
+      historySet.add(String(pid));                      // 这张不符合，拉黑后重挑
+      candidate = pickFromPool(pool, historySet, family, cfg, false) || pickAnyFromPool(pool, history);
+    }
+  }
+
   // ── 下载（主选失败降一级，不反复打图床）─────────────────────
   let img = null;
   let blocked = false;
@@ -407,6 +433,11 @@ const VALUE_MAP = {
     'half_year': 'half_year', 'year': 'year',
     '一天内': 'day', '一周内': 'week', '一个月内': 'month', '半年内': 'half_year', '一年内': 'year'
   },
+  original: {
+    '不筛选': 'any', 'any': 'any',
+    '只要原创': 'only', 'only': 'only',
+    '只要同人': 'fan', 'fan': 'fan', '排除原创': 'fan'
+  },
   ratio: {
     '自动': '', '全部': '', 'landscape': 'landscape', 'square': 'square', 'portrait': 'portrait',
     '横图': 'landscape', '方图': 'square', '竖图': 'portrait'
@@ -479,6 +510,7 @@ function readConfig(env, family) {
     type: pickMapped(s('TYPE', '只要插画'), VALUE_MAP.type, 'illust'),
     maxPage: int('MAX_PAGE', 3, 1, 1000),
     aiMode: pickMapped(s('AI_MODE', '不筛选'), VALUE_MAP.ai, 'any'),
+    originalMode: pickMapped(s('ORIGINAL', '不筛选'), VALUE_MAP.original, 'any'),
     excludeTags: list('EXCLUDE_TAGS', 20),
     trendingMode: pickMapped(s('TRENDING', '自动'), VALUE_MAP.trending, 'auto'),
     cookie: '',            // 运行时解析：env > 抓包脚本存储
@@ -520,7 +552,7 @@ function uiSignature(cfg) {
 }
 
 function signature(cfg) {
-  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.period, cfg.apiBase, cfg.r18Mode].join('|');
+  return [cfg.keyword, cfg.pixivWord, cfg.tags.join(','), cfg.order, cfg.type, cfg.wordMode, cfg.imgHost, cfg.maxPage, cfg.aiMode, cfg.originalMode, cfg.excludeTags.join(','), cfg.source, cfg.ratio, cfg.period, cfg.apiBase, cfg.r18Mode].join('|');
 }
 
 function nextIso(minutes) {
@@ -694,6 +726,7 @@ async function fetchSearchPage(ctx, cfg, word, p, deep) {
       height: it.height,
       pageCount: it.pageCount,
       ai: it.aiType === 2,           // 2 = 投稿者标注 AI 生成
+      isOriginal: it.isOriginal === true,   // pixiv 官方的「原创」标记，网页搜索里直接有
       r18: it.xRestrict === 1 || it.xRestrict === 2,
       url: String(it.url)
     }))
@@ -936,11 +969,22 @@ async function trendingTags(ctx, cfg) {
 /* ========================= 作品过滤 ========================= */
 
 // AI 与排除标签统一在这里处理：两个搜索源都要经过
+// 判断是不是「原创」作品：
+//   网页搜索直接带 isOriginal 字段（准确）；
+//   第三方代理没有这个字段，只能退回「オリジナル」标签近似 —— 会漏掉没打标签的原创
+function isOriginalWork(it) {
+  if (typeof it.isOriginal === 'boolean') return it.isOriginal;
+  const tags = Array.isArray(it.tags) ? it.tags : [];
+  return tags.some(t => /オリジナル/i.test(String(t)) || String(t).trim() === '原创');
+}
+
 function applyFilters(items, cfg) {
   return items.filter(it => {
     // 第三方接口无视 mode/r18 参数，只能本地按 x_restrict 排
     if (cfg.r18Mode === 'none' && it.r18) return false;
     if (cfg.r18Mode === 'only' && !it.r18) return false;
+    if (cfg.originalMode === 'only' && !isOriginalWork(it)) return false;
+    if (cfg.originalMode === 'fan' && isOriginalWork(it)) return false;
     if (cfg.aiMode === 'only' && !it.ai) return false;
     if (cfg.aiMode === 'exclude' && it.ai) return false;
     if (isExcluded(it, cfg.excludeTags)) return false;
