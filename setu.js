@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.12';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.13';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -257,7 +257,7 @@ export default async function(ctx) {
 
   // ④ 整个池子都在防重复窗口内 -> 按规则随机重复一张（并记下时间，6 小时内不再反复搜）
   if (!candidate) {
-    candidate = pickAnyFromPool(pool, history);
+    candidate = pickAnyFromPool(pool, history, cfg.ratio);
     if (candidate) {
       pool.allSeenAt = now;
       writeJSON(ctx, poolKey, pool);
@@ -298,7 +298,7 @@ export default async function(ctx) {
         break;
       }
       historySet.add(String(pid));                            // 这张不符合，拉黑后重挑
-      candidate = pickFromPool(pool, historySet, family, cfg, false) || pickAnyFromPool(pool, history);
+      candidate = pickFromPool(pool, historySet, family, cfg, true) || pickAnyFromPool(pool, history, cfg.ratio);
     }
     if (!ok) candidate = null;                                // 一张都不符合：宁可留旧图
   }
@@ -904,18 +904,24 @@ function pickByAspect(items, family, aspectFit, strict, ratio) {
 
 // 池内全部都在防重复窗口内时用：忽略历史，随机取一张并标记「重复」
 // 池里的图全在防重复窗口内时：挑「最久没出现过」的那张，形成轮转而不是随机重复
-function pickAnyFromPool(pool, history) {
+function pickAnyFromPool(pool, history, ratio) {
   if (!pool || !Array.isArray(pool.items) || pool.items.length === 0) return null;
+  let items = pool.items;
+  if (ratio) {
+    const ok = items.filter(it => it && matchesRatio(it, ratio));
+    if (!ok.length) return null;      // 池子里没有这个画幅的旧图，就别拿别的将就
+    items = ok;
+  }
   const rank = new Map();
   (history || []).forEach((pid, i) => rank.set(String(pid), i));
   let best = null;
   let bestRank = Infinity;
-  for (const it of pool.items) {
+  for (const it of items) {
     if (!it || !it.url) continue;
     const r = rank.has(String(it.pid)) ? rank.get(String(it.pid)) : -1;
     if (r < bestRank) { bestRank = r; best = it; }
   }
-  if (!best) best = pool.items[0];
+  if (!best) best = items[0];
   best.__repeat = true;
   return best;
 }
@@ -928,8 +934,8 @@ function pickFromPool(pool, historySet, family, cfg, strict) {
   // 选了画幅：先在「实际画幅符合」的条目里挑；严格模式下没有就返回 null 让外层再翻页
   if (cfg.ratio) {
     const ok = fresh.filter(it => matchesRatio(it, cfg.ratio));
-    if (ok.length) fresh = ok;
-    else if (strict) return null;
+    if (!ok.length) return null;      // 指定了画幅就绝不跨画幅将就（哪怕是非严格模式）
+    fresh = ok;
   }
 
   const picked = pickByAspect(fresh, family, cfg.aspectFit, strict, cfg.ratio);
