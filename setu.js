@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v4.11';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v4.12';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -274,7 +274,8 @@ export default async function(ctx) {
   // 第三方代理不给 isOriginal，只能按标签猜（没打标签的原创会漏）。
   // 选了筛选就补一次作品详情查询确认；查不到（风控/超时）就沿用标签判断，不阻塞
   if (candidate && cfg.originalMode !== 'any' && typeof candidate.isOriginal !== 'boolean') {
-    for (let i = 0; i < 3 && candidate; i++) {
+    let ok = false;
+    for (let i = 0; i < 4 && candidate; i++) {
       const pid = candidate.pid;
       try {
         const r = await request(ctx, `https://www.pixiv.net/ajax/illust/${pid}`, {
@@ -284,16 +285,27 @@ export default async function(ctx) {
         }, cfg);
         const b = await r.json().catch(() => null);
         const flag = b && b.error === false && b.body ? b.body.isOriginal : null;
-        if (typeof flag !== 'boolean') break;          // 没这个字段就不猜了，按标签走
+        if (typeof flag !== 'boolean') {
+          // 接口没给字段：退回标签判断，宁可少出图也别把同人当原创放出去
+          ok = cfg.originalMode === 'only' ? isOriginalWork(candidate) : !isOriginalWork(candidate);
+          break;
+        }
         candidate.isOriginal = flag;
-        const pass = cfg.originalMode === 'only' ? flag : !flag;
-        if (pass) break;
+        if ((cfg.originalMode === 'only') === flag) { ok = true; break; }
       } catch (e) {
-        break;                                          // 风控/超时：沿用标签近似
+        // 风控/超时：同样退回标签判断，不把整轮拖死
+        ok = cfg.originalMode === 'only' ? isOriginalWork(candidate) : !isOriginalWork(candidate);
+        break;
       }
-      historySet.add(String(pid));                      // 这张不符合，拉黑后重挑
+      historySet.add(String(pid));                            // 这张不符合，拉黑后重挑
       candidate = pickFromPool(pool, historySet, family, cfg, false) || pickAnyFromPool(pool, history);
     }
+    if (!ok) candidate = null;                                // 一张都不符合：宁可留旧图
+  }
+
+  if (!candidate) {
+    if (cached && cached.dataUri) return buildWidget(cached, family, cfg, nextIso(10));
+    return buildError('没有符合「原创 / 同人」筛选的作品', cfg, nextIso(15));
   }
 
   // ── 下载（主选失败降一级，不反复打图床）─────────────────────
@@ -983,8 +995,14 @@ function applyFilters(items, cfg) {
     // 第三方接口无视 mode/r18 参数，只能本地按 x_restrict 排
     if (cfg.r18Mode === 'none' && it.r18) return false;
     if (cfg.r18Mode === 'only' && !it.r18) return false;
-    if (cfg.originalMode === 'only' && !isOriginalWork(it)) return false;
-    if (cfg.originalMode === 'fan' && isOriginalWork(it)) return false;
+    // 有 isOriginal 字段就直接按字段判（网页模式）
+    // 没有字段（代理）：只要同人先用标签粗筛；只要原创则放行，交给后面的详情补查，
+    // 否则「没打标签的原创」会被标签提前丢掉，永远找不回来
+    if (cfg.originalMode === 'only') {
+      if (typeof it.isOriginal === 'boolean' && !it.isOriginal) return false;
+    } else if (cfg.originalMode === 'fan') {
+      if (isOriginalWork(it)) return false;
+    }
     if (cfg.aiMode === 'only' && !it.ai) return false;
     if (cfg.aiMode === 'exclude' && it.ai) return false;
     if (isExcluded(it, cfg.excludeTags)) return false;
