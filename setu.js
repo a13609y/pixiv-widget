@@ -55,7 +55,7 @@
  * REQUEST_TIMEOUT 单次请求超时（秒）                      默认 15
  * ================================================================ */
 
-const SCRIPT_VER = 'v5.0';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
+const SCRIPT_VER = 'v5.1';   // 改动脚本时顺手 +1：调试角标第一段就是它，用来确认跑的是新代码
 
 const K = {
   cache: 'sx5_cache_',       // + family
@@ -104,6 +104,13 @@ export default async function(ctx) {
   const cooldownMs = cfg.cooldownMin > 0 ? cfg.cooldownMin * 60000 : 0;
   // 整次渲染的时间预算：Egern 给的 60s 里留 15s 余量，超了就不再发新请求
   cfg.deadline = now + 45 * 1000;
+  cfg.netCalls = 0;            // 本次刷新的「搜索类」请求计数（榜单/搜索/网页共享预算）
+  cfg.rankTried = 0;           // 榜单每轮只问 1 页，没合适的立刻转搜索
+  cfg.detailCalls = 0;         // 原创校准的详情查询计数
+  cfg.rankSkip = (() => {      // 榜单刚挂过就 30 分钟内别再试，别每次刷新都白打一发
+    const at = Number(ctx.storage.get('pixiv_rank_fail') || 0) || 0;
+    return at > 0 && now - at < 30 * 60 * 1000;
+  })();
 
   if (family === 'accessoryInline') {
     return { type: 'widget', children: [{ type: 'text', text: 'Pixiv', maxLines: 1 }] };
@@ -287,8 +294,18 @@ export default async function(ctx) {
   // 选了筛选就补一次作品详情查询确认；查不到（风控/超时）就沿用标签判断，不阻塞
   if (candidate && cfg.originalMode !== 'any' && typeof candidate.isOriginal !== 'boolean') {
     let ok = false;
-    for (let i = 0; i < 4 && candidate; i++) {
+    const memo = readJSON(ctx, 'sx5_orig_memo') || {};
+    for (let i = 0; i < 3 && candidate; i++) {
       const pid = candidate.pid;
+      if (typeof memo[pid] === 'boolean') {          // 查过的直接用，不重复发请求
+        candidate.isOriginal = memo[pid];
+        if ((cfg.originalMode === 'only') === memo[pid]) { ok = true; break; }
+        historySet.add(String(pid));
+        candidate = pickFromPool(pool, historySet, family, cfg, true) || pickAnyFromPool(pool, history, cfg.ratio);
+        continue;
+      }
+      if (cfg.detailCalls >= 2) break;              // 每轮最多查 2 张详情，别把请求数堆上去
+      cfg.detailCalls++;
       try {
         const r = await request(ctx, `https://www.pixiv.net/ajax/illust/${pid}`, {
           'Accept': 'application/json',
@@ -303,6 +320,10 @@ export default async function(ctx) {
           break;
         }
         candidate.isOriginal = flag;
+        memo[pid] = flag;
+        const keys = Object.keys(memo);
+        if (keys.length > 300) delete memo[keys[0]];
+        writeJSON(ctx, 'sx5_orig_memo', memo);
         if ((cfg.originalMode === 'only') === flag) { ok = true; break; }
       } catch (e) {
         // 风控/超时：同样退回标签判断，不把整轮拖死
@@ -635,14 +656,22 @@ function periodStart(period) {
 }
 
 async function searchAny(ctx, cfg, page, word, deep) {
+  if (cfg.netCalls >= 4) throw Object.assign(new Error('本轮请求已达上限'), { status: 429 });
+
   // 热门榜：显式选了榜单就直接用（忽略搜索词）；「代理 + 没填词」也自动走榜单
-  if (cfg.source === 'ranking' || (!word && cfg.preferRanking)) {
+  if (!cfg.rankSkip && cfg.rankTried < 1 && (cfg.source === 'ranking' || (!word && cfg.preferRanking))) {
     try {
-      return await searchRanking(ctx, cfg, page);
+      cfg.netCalls++;
+      cfg.rankTried++;
+      const out = await searchRanking(ctx, cfg, page);
+      ctx.storage.set('pixiv_rank_fail', '0');
+      return out;
     } catch (e) {
+      ctx.storage.set('pixiv_rank_fail', String(Date.now()));   // 30 分钟内不再试榜单
       ctx.storage.set('pixiv_proxy_err', JSON.stringify({ at: Date.now(), msg: '榜单不可用：' + String((e && e.message) || e).slice(0, 90) }));
       word = defaultWord(cfg);   // 榜单挂了 / 被筛空 → 换随机标签，走同一个代理的搜索接口
       try {
+        cfg.netCalls++;
         const out = await searchProxy(ctx, cfg, page, word, deep);
         out.word = word;
         return out;
@@ -652,10 +681,12 @@ async function searchAny(ctx, cfg, page, word, deep) {
 
   // 代理固定 content_type=illust（要漫画只能走网页）；且实测它忽略 sort，
   // 选了「人气最高」时先打代理只会拿到最新，直接改走网页搜索
-  const proxyUsable = cfg.source === 'proxy' && cfg.type !== 'manga'
+  const proxyUsable = (cfg.source === 'proxy' || cfg.source === 'ranking') && cfg.type !== 'manga'
     && !(cfg.order === 'popular_d' && cfg.cookie);   // 未登录时网页也排不出热度，留在代理保住服务端画幅筛选
+  if (!word) word = defaultWord(cfg);                // 榜单这轮问过了，退回随机标签搜索
   if (proxyUsable) {
     try {
+      cfg.netCalls++;
       const out = await searchProxy(ctx, cfg, page, word, deep);
       out.word = word;
       return out;
@@ -664,6 +695,7 @@ async function searchAny(ctx, cfg, page, word, deep) {
       ctx.storage.set('pixiv_proxy_err', JSON.stringify({ at: Date.now(), msg: String((e && e.message) || e).slice(0, 120) }));
     }
   }
+  cfg.netCalls++;
   const out2 = await searchPixiv(ctx, cfg, page, word, deep);
   out2.word = word;
   return out2;
